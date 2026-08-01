@@ -12,8 +12,18 @@ pub fn main(init: std.process.Init) !void {
     var read_buffer: [4096]u8 = undefined;
 
     while (true) {
-        if (try client.readMessage(&read_buffer)) |msg| {
-            std.debug.print("Message: {s}\n", .{msg});
+        const msg = try client.readMessageInto(&read_buffer);
+
+        if (msg) |m| {
+            if (m.prefix) |prefix| {
+                std.debug.print("Prefix: {s}\n", .{prefix});
+            }
+            std.debug.print("Command: {s}\n", .{m.command});
+            std.debug.print("Trailing: {s}\n", .{m.trailing});
+            for (m.params) |param| {
+                if (param.len == 0) continue;
+                std.debug.print("Param: {s}\n", .{param});
+            }
         }
     }
 }

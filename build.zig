@@ -4,16 +4,27 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addModule("irc-client", .{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
+    const lib_module = b.createModule(.{
+        .root_source_file = b.path("src/lib/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const lib = b.addLibrary(.{
+        .name = "irc-client",
+        .root_module = lib_module,
+    });
+
+    b.installArtifact(lib);
 
     const exe = b.addExecutable(.{
         .name = "irc_client",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
-            .target = target,
             .optimize = optimize,
+            .target = target,
             .imports = &.{
-                .{ .name = "irc-client", .module = lib },
+                .{ .name = "irc-client", .module = lib_module },
             },
         }),
     });
@@ -38,12 +49,18 @@ pub fn build(b: *std.Build) void {
         .root_module = exe.root_module,
     });
 
-    // A run step that will run the second test executable.
+    const lib_tests = b.addTest(.{
+        .root_module = lib_module,
+    });
+
+    // A run step that will run the test executables.
     const run_exe_tests = b.addRunArtifact(exe_tests);
+    const run_lib_tests = b.addRunArtifact(lib_tests);
 
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_lib_tests.step);
 }
