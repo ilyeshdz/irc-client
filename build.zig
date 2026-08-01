@@ -4,11 +4,19 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const exe = b.addExecutable(.{ .name = "irc_client", .root_module = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    }) });
+    const lib = b.addModule("irc-client", .{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
+
+    const exe = b.addExecutable(.{
+        .name = "irc_client",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "irc-client", .module = lib },
+            },
+        }),
+    });
 
     b.installArtifact(exe);
 
