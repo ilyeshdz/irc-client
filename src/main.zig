@@ -15,6 +15,7 @@ pub fn main(init: std.process.Init) !void {
         const msg = try client.readMessageInto(&read_buffer);
 
         if (msg) |m| {
+            std.debug.print("Raw: {s}\n", .{m.raw});
             if (m.prefix) |prefix| {
                 std.debug.print("Prefix: {s}\n", .{prefix});
             }
