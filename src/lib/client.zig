@@ -35,7 +35,8 @@ pub const IrcClient = struct {
 
     pub fn readMessageInto(self: IrcClient, buffer: []u8) !?Message {
         var reader = self.stream.reader(self.io, buffer);
-        const line = try reader.interface.takeDelimiter('\n') orelse return null;
+        var line_buffer: [1024]u8 = undefined;
+        const line = try readUntilEndOfLine(&reader.interface, &line_buffer);
 
         const msg = try Message.parse(line);
 
@@ -48,3 +49,19 @@ pub const IrcClient = struct {
         return msg;
     }
 };
+
+fn readUntilEndOfLine(reader: *std.Io.Reader, buf: []u8) ![]const u8 {
+    var i: usize = 0;
+
+    while (true) {
+        const byte = try reader.takeByte();
+
+        if (byte == '\r' and try reader.peekByte() == '\n') {
+            _ = try reader.takeByte(); // consume the \n byte
+            return buf[0..i];
+        }
+
+        buf[i] = byte;
+        i += 1;
+    }
+}
