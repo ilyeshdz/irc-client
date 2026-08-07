@@ -75,6 +75,7 @@ pub const Message = struct {
         if (self.prefix) |prefix| {
             try writer.writeAll(":");
             try writer.writeAll(prefix);
+            try writer.writeAll(" ");
         }
         try writer.writeAll(self.command);
         for (self.params) |param| {
