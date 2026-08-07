@@ -4,9 +4,7 @@ const net = std.Io.net;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
-    // NOTE: this client does plain TCP only; it has no TLS support. Use a
-    // plaintext (6667) port. 6697 on most servers is TLS-only and will cause
-    // the server to close the connection (EndOfStream) immediately.
+    // Plain TCP only (no TLS), so use a 6667 port.
     var client = try IrcClient.init(io, "irc.ircnet.com", 6667);
     defer client.deinit();
 

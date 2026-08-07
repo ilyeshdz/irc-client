@@ -8,17 +8,7 @@ pub const IrcClient = struct {
     io: std.Io,
     stream: net.Stream,
 
-    /// The `Reader`'s internal storage. Because a single lower-level `read()`
-    /// may pull in several whole IRC lines at once, this read state must be
-    /// kept alive across `readMessageInto` calls. Re-creating the reader every
-    /// call would discard any already-buffered but unconsumed bytes, losing
-    /// messages (and eventually erroring with `EndOfStream` when the socket
-    /// then reports EOF).
     read_buffer: [MAX_MESSAGE_LENGTH]u8 = undefined,
-    /// Lazily instantiated on first read, once `self` lives at its final
-    /// address. The `Reader` stores a slice into `read_buffer`, so building it
-    /// too early (inside `init`, which returns the struct by value) would leave
-    /// a dangling pointer into the moved temporary.
     reader: ?net.Stream.Reader = null,
 
     pub fn init(io: std.Io, host: []const u8, port: u16) !IrcClient {
@@ -73,8 +63,6 @@ fn readUntilEndOfLine(reader: *std.Io.Reader, buf: []u8) ![]const u8 {
 
     while (true) {
         if (i >= buf.len) {
-            // Drain the rest of the over-long line so the stream stays in
-            // sync instead of re-reading the same bytes and looping forever.
             while (true) {
                 if (try reader.takeByte() == '\n') break;
             }
@@ -85,13 +73,12 @@ fn readUntilEndOfLine(reader: *std.Io.Reader, buf: []u8) ![]const u8 {
 
         if (byte == '\r') {
             if (try reader.peekByte() == '\n') {
-                _ = try reader.takeByte(); // consume the \n byte
+                _ = try reader.takeByte();
             }
             return buf[0..i];
         }
 
         if (byte == '\n') {
-            // Bare-\n line terminator; some servers do this.
             return buf[0..i];
         }
 
