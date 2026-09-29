@@ -63,13 +63,13 @@ pub const IrcClient = struct {
 
     /// Send a message to a target (channel or user).
     pub fn sendMessage(self: *IrcClient, target: []const u8, text: []const u8) !void {
-        try self.send(Message{ .command = "PRIVMSG", .params = .{target}, .trailing = text });
+        try self.send(Message{ .command = "PRIVMSG", .params = .{target} ++ .{""} ** 14, .trailing = text });
     }
 
     /// Leave a channel with an optional reason.
     pub fn partChannel(self: *IrcClient, channel: []const u8, reason: ?[]const u8) !void {
         if (reason) |r| {
-            try self.send(Message{ .command = "PART", .params = .{channel}, .trailing = r });
+            try self.send(Message{ .command = "PART", .params = .{channel} ++ .{""} ** 14, .trailing = r });
         } else {
             try self.send(Message{ .command = "PART", .params = .{channel} ++ .{""} ** 14 });
         }
