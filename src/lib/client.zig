@@ -15,6 +15,8 @@ pub const IrcClient = struct {
     collecting_motd: bool,
     motd_complete: bool,
 
+    current_channel: ?[]const u8 = null,
+
     pub fn init(io: std.Io, host: []const u8, port: u16) !IrcClient {
         const hostname = try net.HostName.init(host);
         const stream = try hostname.connect(io, port, .{ .mode = .stream });
@@ -25,6 +27,7 @@ pub const IrcClient = struct {
             .motd_buffer = motd_buffer,
             .collecting_motd = false,
             .motd_complete = false,
+            .current_channel = null,
         };
         return client;
     }
@@ -46,6 +49,49 @@ pub const IrcClient = struct {
         var writer = self.stream.writer(self.io, &buffer);
         try message.format(&writer.interface);
         try writer.interface.flush();
+    }
+
+    /// Send a raw command with variable parameters.
+    pub fn sendRaw(self: *IrcClient, command: []const u8, params: []const u8) !void {
+        try self.send(Message{ .command = command, .params = .{params} ++ .{""} ** 14 });
+    }
+
+    /// Join a channel.
+    pub fn joinChannel(self: *IrcClient, channel: []const u8) !void {
+        try self.send(Message{ .command = "JOIN", .params = .{channel} ++ .{""} ** 14 });
+    }
+
+    /// Send a message to a target (channel or user).
+    pub fn sendMessage(self: *IrcClient, target: []const u8, text: []const u8) !void {
+        try self.send(Message{ .command = "PRIVMSG", .params = .{target}, .trailing = text });
+    }
+
+    /// Leave a channel with an optional reason.
+    pub fn partChannel(self: *IrcClient, channel: []const u8, reason: ?[]const u8) !void {
+        if (reason) |r| {
+            try self.send(Message{ .command = "PART", .params = .{channel}, .trailing = r });
+        } else {
+            try self.send(Message{ .command = "PART", .params = .{channel} ++ .{""} ** 14 });
+        }
+    }
+
+    /// Quit the server with an optional reason.
+    pub fn quit(self: *IrcClient, reason: ?[]const u8) !void {
+        if (reason) |r| {
+            try self.send(Message{ .command = "QUIT", .trailing = r });
+        } else {
+            try self.send(Message{ .command = "QUIT" });
+        }
+    }
+
+    /// Set the current channel for default message targeting.
+    pub fn setCurrentChannel(self: *IrcClient, channel: []const u8) void {
+        self.current_channel = channel;
+    }
+
+    /// Get the current channel.
+    pub fn getCurrentChannel(self: *IrcClient) ?[]const u8 {
+        return self.current_channel;
     }
 
     /// Handle MOTD-related numeric commands (375, 372, 376).
