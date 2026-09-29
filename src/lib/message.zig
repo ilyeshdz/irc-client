@@ -1,5 +1,6 @@
 const std = @import("std");
 
+/// The maximum amount of params we can allocate to the memory
 const MAX_PARAMS = 15;
 
 pub const Message = struct {
@@ -43,7 +44,7 @@ pub const Message = struct {
             }
         }
 
-        var params: [MAX_PARAMS][]const u8 = .{""} ** MAX_PARAMS;
+        var params: [MAX_PARAMS][]const u8 = .{""} ** MAX_PARAMS; // allocate and fill that allocated space with [1]const u8
         var params_len: usize = 0;
 
         var params_slice: []const u8 = undefined;

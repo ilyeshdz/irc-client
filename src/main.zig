@@ -11,6 +11,7 @@ pub fn main(init: std.process.Init) !void {
     try client.handshake("hdzilyes", "hdzilyes");
 
     var read_buffer: [512]u8 = undefined;
+    var motd_printed = false;
 
     while (true) {
         const msg = try client.readMessageInto(&read_buffer);
@@ -26,6 +27,16 @@ pub fn main(init: std.process.Init) !void {
                 if (param.len == 0) continue;
                 std.debug.print("Param: {s}\n", .{param});
             }
+        }
+
+        if (!motd_printed and client.isMOTDComplete()) {
+            const motd = client.getMOTD();
+            if (motd.len > 0) {
+                std.debug.print("\n=== MOTD ===\n{s}\n==============\n", .{motd});
+            } else {
+                std.debug.print("\n=== MOTD (empty) ===\n", .{});
+            }
+            motd_printed = true;
         }
     }
 }

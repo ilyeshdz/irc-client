@@ -11,14 +11,27 @@ pub const IrcClient = struct {
     read_buffer: [MAX_MESSAGE_LENGTH]u8 = undefined,
     reader: ?net.Stream.Reader = null,
 
+    motd_buffer: std.ArrayList(u8),
+    collecting_motd: bool,
+    motd_complete: bool,
+
     pub fn init(io: std.Io, host: []const u8, port: u16) !IrcClient {
         const hostname = try net.HostName.init(host);
         const stream = try hostname.connect(io, port, .{ .mode = .stream });
-        return .{ .io = io, .stream = stream };
+        const motd_buffer = try std.ArrayList(u8).initCapacity(std.heap.page_allocator, 1024);
+        const client = IrcClient{
+            .io = io,
+            .stream = stream,
+            .motd_buffer = motd_buffer,
+            .collecting_motd = false,
+            .motd_complete = false,
+        };
+        return client;
     }
 
     pub fn deinit(self: *IrcClient) void {
         self.stream.close(self.io);
+        self.motd_buffer.deinit(std.heap.page_allocator);
     }
 
     /// Handshake with the IRC server, sending the NICK and USER commands.
@@ -33,6 +46,52 @@ pub const IrcClient = struct {
         var writer = self.stream.writer(self.io, &buffer);
         try message.format(&writer.interface);
         try writer.interface.flush();
+    }
+
+    /// Handle MOTD-related numeric commands (375, 372, 376).
+    fn handleMOTD(self: *IrcClient, message: Message) !void {
+        const allocator = std.heap.page_allocator;
+        if (std.mem.eql(u8, message.command, "375")) {
+            // RPL_MOTDSTART - Start of MOTD
+            self.collecting_motd = true;
+            self.motd_complete = false;
+            self.motd_buffer.clearRetainingCapacity();
+            if (message.trailing.len > 0) {
+                try self.motd_buffer.appendSlice(allocator, message.trailing);
+                try self.motd_buffer.appendSlice(allocator, "\n");
+            }
+        } else if (std.mem.eql(u8, message.command, "372")) {
+            // RPL_MOTD - MOTD text line
+            if (self.collecting_motd and message.trailing.len > 0) {
+                try self.motd_buffer.appendSlice(allocator, message.trailing);
+                try self.motd_buffer.appendSlice(allocator, "\n");
+            }
+        } else if (std.mem.eql(u8, message.command, "376")) {
+            // RPL_ENDOFMOTD - End of MOTD
+            if (self.collecting_motd) {
+                self.collecting_motd = false;
+                self.motd_complete = true;
+                if (message.trailing.len > 0) {
+                    try self.motd_buffer.appendSlice(allocator, message.trailing);
+                    try self.motd_buffer.appendSlice(allocator, "\n");
+                }
+            }
+        }
+    }
+
+    /// Returns the complete MOTD if available, empty slice otherwise.
+    pub fn getMOTD(self: *IrcClient) []const u8 {
+        return self.motd_buffer.items;
+    }
+
+    /// Returns true if MOTD has been fully received.
+    pub fn isMOTDComplete(self: *IrcClient) bool {
+        return self.motd_complete;
+    }
+
+    /// Returns true if currently collecting MOTD lines.
+    pub fn isCollectingMOTD(self: *IrcClient) bool {
+        return self.collecting_motd;
     }
 
     fn ensureReader(self: *IrcClient) *net.Stream.Reader {
@@ -53,6 +112,8 @@ pub const IrcClient = struct {
             try self.send(Message{ .command = "PONG", .params = .{token} ++ .{""} ** 14 });
             return null;
         }
+
+        try self.handleMOTD(msg);
 
         return msg;
     }
