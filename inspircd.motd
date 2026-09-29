@@ -1,0 +1,13 @@
+Welcome to the Test IRC Server!
+
+This is a local test server for the irc-client project.
+
+Available commands:
+- /join #channel  - Join a channel
+- /msg user text  - Send private message
+- /quit           - Disconnect
+- /help           - Show help
+
+Have fun testing!
+
+Maintained by: Test Admin <admin@test.local>
