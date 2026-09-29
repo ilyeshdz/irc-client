@@ -2,11 +2,14 @@ version: '3.8'
 
 services:
   ircd:
-    image: inspircd/inspircd:latest
+    image: inspircd/inspircd-docker:latest
     container_name: irc-client-test-server
     ports:
       - "6667:6667"
       - "6697:6697"
     volumes:
       - ./inspircd.conf:/etc/inspircd/inspircd.conf:ro
+      - ./inspircd.motd:/etc/inspircd/inspircd.motd:ro
+      - ./inspircd.rules:/etc/inspircd/inspircd.rules:ro
+      - ./opermotd:/etc/inspircd/opermotd:ro
     restart: unless-stopped
