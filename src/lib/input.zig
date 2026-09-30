@@ -78,7 +78,6 @@ pub fn executeCommand(client: *IrcClient, cmd: Command) !void {
         .Join => |channel| {
             try client.joinChannel(channel);
             client.setCurrentChannel(channel);
-            std.debug.print("Joined {s}\n", .{channel});
         },
         .Part => |p| {
             try client.partChannel(p.channel, p.reason);
@@ -87,7 +86,6 @@ pub fn executeCommand(client: *IrcClient, cmd: Command) !void {
                     client.setCurrentChannel("");
                 }
             }
-            std.debug.print("Parted {s}\n", .{p.channel});
         },
         .Msg => |m| {
             try client.sendMessage(m.target, m.text);
@@ -102,7 +100,8 @@ pub fn executeCommand(client: *IrcClient, cmd: Command) !void {
             printHelp();
         },
         .List => {
-            try client.sendRaw("list", &[_:0]u8{});
+            try client.listChannels();
+            std.debug.print("Requesting channel list...\n", .{});
         },
         .Unknown => |unknown_cmd| {
             std.debug.print("Unknown command: /{s}. Type /help for help.\n", .{unknown_cmd});
@@ -115,6 +114,7 @@ fn printHelp() void {
     std.debug.print("  /join <channel>     - Join a channel (alias: /j)\n", .{});
     std.debug.print("  /part [channel] [reason] - Leave a channel (alias: /p)\n", .{});
     std.debug.print("  /msg <target> <text> - Send a message (alias: /m)\n", .{});
+    std.debug.print("  /list               - List channels (alias: /l)\n", .{});
     std.debug.print("  /raw <cmd> [params] - Send raw IRC command (alias: /r)\n", .{});
     std.debug.print("  /quit [reason]      - Disconnect from server (alias: /q)\n", .{});
     std.debug.print("  /help               - Show this help (alias: /h)\n", .{});
@@ -134,8 +134,6 @@ pub fn runEventLoop(client: *IrcClient) !void {
     var read_buffer: [512]u8 = undefined;
     var input_buffer: [1024]u8 = undefined;
     var input_len: usize = 0;
-
-    var motd_printed = false;
 
     while (true) {
         _ = try std.posix.poll(&poll_fds, -1);
@@ -183,37 +181,16 @@ pub fn runEventLoop(client: *IrcClient) !void {
             }
         }
 
-        // Handle socket input
-        if (poll_fds[1].revents & std.posix.POLL.IN != 0) {
-            const msg = try client.readMessageInto(&read_buffer);
-            if (msg) |m| {
-                std.debug.print("Raw: {s}\n", .{m.raw});
-                if (m.prefix) |prefix| {
-                    std.debug.print("Prefix: {s}\n", .{prefix});
-                }
-                std.debug.print("Command: {s}\n", .{m.command});
-                std.debug.print("Trailing: {s}\n", .{m.trailing});
-                for (m.params) |param| {
-                    if (param.len == 0) continue;
-                    std.debug.print("Param: {s}\n", .{param});
-                }
-            }
+        // Drain all complete server lines, including ones already sitting in
+        // the Reader's userspace buffer (poll can't see those).
+        while (try client.hasCompleteLine(socket_fd)) {
+            _ = try client.readMessageInto(&read_buffer);
         }
 
         // Handle socket errors/hangup
         if (poll_fds[1].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP) != 0) {
             std.debug.print("Connection lost\n", .{});
             break;
-        }
-
-        if (!motd_printed and client.isMOTDComplete()) {
-            const motd = client.getMOTD();
-            if (motd.len > 0) {
-                std.debug.print("\n=== MOTD ===\n{s}\n==============\n", .{motd});
-            } else {
-                std.debug.print("\n=== MOTD (empty) ===\n", .{});
-            }
-            motd_printed = true;
         }
     }
 }

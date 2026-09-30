@@ -1,5 +1,6 @@
 const std = @import("std");
 const Message = @import("message.zig").Message;
+const Display = @import("display.zig").Display;
 const net = std.Io.net;
 
 const MAX_MESSAGE_LENGTH = 512;
@@ -11,22 +12,20 @@ pub const IrcClient = struct {
     read_buffer: [MAX_MESSAGE_LENGTH]u8 = undefined,
     reader: ?net.Stream.Reader = null,
 
-    motd_buffer: std.ArrayList(u8),
-    collecting_motd: bool,
-    motd_complete: bool,
+    display: Display,
+    current_nick: []const u8,
 
     current_channel: ?[]const u8 = null,
 
     pub fn init(io: std.Io, host: []const u8, port: u16) !IrcClient {
         const hostname = try net.HostName.init(host);
         const stream = try hostname.connect(io, port, .{ .mode = .stream });
-        const motd_buffer = try std.ArrayList(u8).initCapacity(std.heap.page_allocator, 1024);
+        const display = try Display.init(std.heap.page_allocator);
         const client = IrcClient{
             .io = io,
             .stream = stream,
-            .motd_buffer = motd_buffer,
-            .collecting_motd = false,
-            .motd_complete = false,
+            .display = display,
+            .current_nick = "",
             .current_channel = null,
         };
         return client;
@@ -34,11 +33,13 @@ pub const IrcClient = struct {
 
     pub fn deinit(self: *IrcClient) void {
         self.stream.close(self.io);
-        self.motd_buffer.deinit(std.heap.page_allocator);
+        self.display.deinit();
     }
 
     /// Handshake with the IRC server, sending the NICK and USER commands.
     pub fn handshake(self: *IrcClient, username: []const u8, realname: []const u8) !void {
+        self.current_nick = username;
+        self.display.setCurrentNick(username);
         try self.send(Message{ .command = "NICK", .params = .{username} ++ .{""} ** 14 });
         try self.send(Message{ .command = "USER", .params = .{ username, "0", "*", realname } ++ .{""} ** 11 });
     }
@@ -59,6 +60,12 @@ pub const IrcClient = struct {
     /// Join a channel.
     pub fn joinChannel(self: *IrcClient, channel: []const u8) !void {
         try self.send(Message{ .command = "JOIN", .params = .{channel} ++ .{""} ** 14 });
+    }
+
+    /// Request the server's channel list.
+    pub fn listChannels(self: *IrcClient) !void {
+        self.display.beginList();
+        try self.sendRaw("list", &[_:0]u8{});
     }
 
     /// Send a message to a target (channel or user).
@@ -87,6 +94,7 @@ pub const IrcClient = struct {
     /// Set the current channel for default message targeting.
     pub fn setCurrentChannel(self: *IrcClient, channel: []const u8) void {
         self.current_channel = channel;
+        self.display.setCurrentChannel(channel);
     }
 
     /// Get the current channel.
@@ -94,57 +102,25 @@ pub const IrcClient = struct {
         return self.current_channel;
     }
 
-    /// Handle MOTD-related numeric commands (375, 372, 376).
-    fn handleMOTD(self: *IrcClient, message: Message) !void {
-        const allocator = std.heap.page_allocator;
-        if (std.mem.eql(u8, message.command, "375")) {
-            // RPL_MOTDSTART - Start of MOTD
-            self.collecting_motd = true;
-            self.motd_complete = false;
-            self.motd_buffer.clearRetainingCapacity();
-            if (message.trailing.len > 0) {
-                try self.motd_buffer.appendSlice(allocator, message.trailing);
-                try self.motd_buffer.appendSlice(allocator, "\n");
-            }
-        } else if (std.mem.eql(u8, message.command, "372")) {
-            // RPL_MOTD - MOTD text line
-            if (self.collecting_motd and message.trailing.len > 0) {
-                try self.motd_buffer.appendSlice(allocator, message.trailing);
-                try self.motd_buffer.appendSlice(allocator, "\n");
-            }
-        } else if (std.mem.eql(u8, message.command, "376")) {
-            // RPL_ENDOFMOTD - End of MOTD
-            if (self.collecting_motd) {
-                self.collecting_motd = false;
-                self.motd_complete = true;
-                if (message.trailing.len > 0) {
-                    try self.motd_buffer.appendSlice(allocator, message.trailing);
-                    try self.motd_buffer.appendSlice(allocator, "\n");
-                }
-            }
-        }
-    }
-
-    /// Returns the complete MOTD if available, empty slice otherwise.
-    pub fn getMOTD(self: *IrcClient) []const u8 {
-        return self.motd_buffer.items;
-    }
-
-    /// Returns true if MOTD has been fully received.
-    pub fn isMOTDComplete(self: *IrcClient) bool {
-        return self.motd_complete;
-    }
-
-    /// Returns true if currently collecting MOTD lines.
-    pub fn isCollectingMOTD(self: *IrcClient) bool {
-        return self.collecting_motd;
-    }
-
     fn ensureReader(self: *IrcClient) *net.Stream.Reader {
         if (self.reader == null) {
             self.reader = self.stream.reader(self.io, &self.read_buffer);
         }
         return &self.reader.?;
+    }
+
+    /// Returns true if a complete server line can be read without blocking:
+    /// either a full line is already buffered in the Reader, or the socket
+    /// has fresh data waiting (checked with a zero-timeout poll).
+    /// This avoids stalling on lines stuck in the Reader's userspace buffer
+    /// while poll() sleeps on an empty kernel buffer.
+    pub fn hasCompleteLine(self: *IrcClient, socket_fd: std.posix.fd_t) !bool {
+        const r = self.ensureReader();
+        if (std.mem.indexOfScalar(u8, r.interface.buffered(), '\n') != null) return true;
+        var tmp = [_]std.posix.pollfd{
+            .{ .fd = socket_fd, .events = std.posix.POLL.IN, .revents = 0 },
+        };
+        return try std.posix.poll(&tmp, 0) > 0;
     }
 
     pub fn readMessageInto(self: *IrcClient, buffer: []u8) !?Message {
@@ -159,9 +135,13 @@ pub const IrcClient = struct {
             return null;
         }
 
-        try self.handleMOTD(msg);
+        try self.display.handleServerMessage(msg);
 
         return msg;
+    }
+
+    pub fn isMOTDComplete(self: *IrcClient) bool {
+        return self.display.isMOTDComplete();
     }
 };
 
