@@ -8,6 +8,7 @@ pub const Command = union(enum) {
     Raw: struct { command: []const u8, params: []const u8 },
     Quit: ?[]const u8,
     Help,
+    List,
     Unknown: []const u8,
 
     pub fn parse(input: []const u8, current_channel: ?[]const u8) !?Command {
@@ -27,6 +28,8 @@ pub const Command = union(enum) {
         if (std.mem.eql(u8, cmd, "join") or std.mem.eql(u8, cmd, "j")) {
             const channel = iter.next() orelse return error.MissingArgument;
             return Command{ .Join = channel };
+        } else if (std.mem.eql(u8, cmd, "list") or std.mem.eql(u8, cmd, "l")) {
+            return Command{ .List = {} };
         } else if (std.mem.eql(u8, cmd, "part") or std.mem.eql(u8, cmd, "p")) {
             const channel = iter.next() orelse return error.MissingArgument;
             var reason: ?[]const u8 = null;
@@ -40,7 +43,7 @@ pub const Command = union(enum) {
             const text = iter.next() orelse return error.MissingArgument;
             var rest = text;
             while (iter.next()) |r| {
-                rest = try std.fmt.allocPrint(std.heap.page_allocator, "{s} {s}", .{rest, r});
+                rest = try std.fmt.allocPrint(std.heap.page_allocator, "{s} {s}", .{ rest, r });
                 defer std.heap.page_allocator.free(rest);
             }
             return Command{ .Msg = .{ .target = target, .text = rest } };
@@ -50,7 +53,7 @@ pub const Command = union(enum) {
             if (iter.next()) |p| {
                 params = p;
                 while (iter.next()) |r| {
-                    params = try std.fmt.allocPrint(std.heap.page_allocator, "{s} {s}", .{params, r});
+                    params = try std.fmt.allocPrint(std.heap.page_allocator, "{s} {s}", .{ params, r });
                     defer std.heap.page_allocator.free(params);
                 }
             }
@@ -97,6 +100,9 @@ pub fn executeCommand(client: *IrcClient, cmd: Command) !void {
         },
         .Help => {
             printHelp();
+        },
+        .List => {
+            try client.sendRaw("list", &[_:0]u8{});
         },
         .Unknown => |unknown_cmd| {
             std.debug.print("Unknown command: /{s}. Type /help for help.\n", .{unknown_cmd});
@@ -169,7 +175,7 @@ pub fn runEventLoop(client: *IrcClient) !void {
 
                     // Shift remaining buffer
                     const remaining = input_len - (newline_idx + 1);
-                    std.mem.copyForwards(u8, input_buffer[0..remaining], input_buffer[newline_idx + 1..input_len]);
+                    std.mem.copyForwards(u8, input_buffer[0..remaining], input_buffer[newline_idx + 1 .. input_len]);
                     input_len = remaining;
                 } else {
                     break;
