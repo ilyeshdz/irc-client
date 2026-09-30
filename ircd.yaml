@@ -1,0 +1,167 @@
+network:
+    name: "TestNet"
+
+server:
+    name: "test.local"
+
+    listeners:
+        # Plaintext on all interfaces for development
+        ":6667":
+        # TLS on all interfaces
+        ":6697":
+            tls:
+                cert: "fullchain.pem"
+                key: "privkey.pem"
+            proxy: false
+            min-tls-version: "1.2"
+
+    casemapping: "ascii"
+    enforce-utf8: true
+    lookup-hostnames: false
+    forward-confirm-hostnames: true
+    check-ident: false
+    coerce-ident: '~u'
+    max-sendq: "96k"
+
+    motd: "ergo.motd"
+    motd-formatting: true
+
+    idle-timeouts:
+        registration: 60s
+        ping: 90s
+        disconnect: 150s
+
+    relaymsg:
+        enabled: true
+
+    history:
+        enabled: true
+        max-messages-per-channel: 1000
+        max-message-age: 168h
+
+    ip-cloaking:
+        enabled: true
+        netname: "test"
+        num-bits: 32
+        # For IPv6, use 64 bits
+        # ipv6-prefix-length: 64
+
+datastore:
+    path: "ircd.db"
+    autoupgrade: true
+    mysql:
+        enabled: false
+    postgresql:
+        enabled: false
+    sqlite:
+        enabled: true
+        database-path: "ergo_history.db"
+        busy-timeout: 5s
+        max-conns: 1
+
+limits:
+    nicklen: 32
+    identlen: 20
+    realnamelen: 150
+    channellen: 64
+    awaylen: 390
+    kicklen: 390
+    topiclen: 390
+    monitor-entries: 100
+    whowas-entries: 100
+    chan-list-modes: 100
+    registration-messages: 1024
+    multiline:
+        max-bytes: 4096
+        max-lines: 100
+
+fakelag:
+    enabled: true
+    window: 1s
+    burst-limit: 5
+
+accounts:
+    registration:
+        enabled: true
+    authentication-enabled: true
+    nick-reservation:
+        enabled: true
+        method: "strict"
+        force-nick-equals-account: true
+    multiclient:
+        enabled: true
+        allowed-by-default: true
+        always-on: "opt-in"
+
+opers:
+    admin:
+        class: "server-admin"
+        hidden: true
+        whois-line: "is the server administrator"
+        vhost: "staff.test.local"
+        password: "$2a$04$C.kLWTS6TfJ1RGx0kN7NKuVrmMaDCCmFz2n4ASV9SMr1QSq8EQ00y"
+
+oper-classes:
+    server-admin:
+        permissions:
+            - "chat"
+            - "rehash"
+            - "die"
+            - "restart"
+            - "operwall"
+            - "ban"
+            - "banlist"
+            - "kline"
+            - "unkline"
+            - "sajoin"
+            - "samode"
+            - "sakick"
+            - "squit"
+            - "connect"
+            - "squits"
+            - "override"
+            - "snomasks"
+            - "monitor"
+            - "defcon"
+            - "list"
+            - "whois"
+            - "stats"
+            - "whowas"
+            - "lusers"
+            - "motd"
+            - "version"
+            - "admin"
+            - "info"
+            - "links"
+            - "map"
+            - "trace"
+            - "operwall"
+            - "globops"
+            - "wallops"
+            - "locops"
+            - "setid"
+            - "chghost"
+            - "chgident"
+            - "chgname"
+            - "setidle"
+            - "setaway"
+            - "forcejoin"
+            - "forcenick"
+            - "forcenickserv"
+            - "services"
+            - "modload"
+            - "modunload"
+            - "modlist"
+            - "rehash"
+            - "rehashssl"
+            - "restart"
+            - "die"
+            - "sacmd"
+            - "ubans"
+            - "ubanslist"
+            - "ubansinfo"
+
+logging:
+    - method: "stderr"
+      type: "* -userinput -useroutput"
+      level: "info"

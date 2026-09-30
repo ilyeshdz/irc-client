@@ -2,14 +2,17 @@ version: '3.8'
 
 services:
   ircd:
-    image: inspircd/inspircd-docker:latest
+    image: ghcr.io/ergochat/ergo:stable
     container_name: irc-client-test-server
     ports:
       - "6667:6667"
       - "6697:6697"
     volumes:
-      - ./inspircd.conf:/etc/inspircd/inspircd.conf:ro
-      - ./inspircd.motd:/etc/inspircd/inspircd.motd:ro
-      - ./inspircd.rules:/etc/inspircd/inspircd.rules:ro
-      - ./opermotd:/etc/inspircd/opermotd:ro
+      - ./ircd.yaml:/ircd/ircd.yaml:ro
+      - ./ergo.motd:/ircd/ergo.motd:ro
+      - ircd-data:/ircd
     restart: unless-stopped
+    init: true
+
+volumes:
+  ircd-data:
