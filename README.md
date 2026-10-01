@@ -15,7 +15,18 @@ You'll need [Zig](https://ziglang.org/) installed:
 zig build run
 ```
 
-By default it connects to `irc.ircnet.com:6667`. To use a local test server instead, see "Test Server" below.
+Without arguments it shows a picker: saved profiles first (last used on top,
+favorites starred), then recently used servers, then a few common servers.
+Pick a number, or `n` for a new connection (which you can save as a profile).
+
+```sh
+zig build run -- --profile home   # connect with a saved profile
+zig build run -- local             # quick path to 127.0.0.1:6667
+zig build run -- irc.libera.chat  # quick path to another host
+```
+
+Profiles and recent servers are stored as JSON in
+`~/.config/irc-client/config`.
 
 ## Test Server (local IRC)
 

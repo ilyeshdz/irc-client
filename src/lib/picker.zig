@@ -1,0 +1,228 @@
+const std = @import("std");
+const Cfg = @import("config.zig");
+
+/// A resolved connection choice. All strings are owned; call deinit.
+pub const Choice = struct {
+    allocator: std.mem.Allocator,
+    host: []const u8,
+    port: u16,
+    nick: []const u8,
+    realname: []const u8,
+    profile_name: ?[]const u8 = null,
+
+    pub fn deinit(self: *Choice) void {
+        self.allocator.free(self.host);
+        self.allocator.free(self.nick);
+        self.allocator.free(self.realname);
+        if (self.profile_name) |n| self.allocator.free(n);
+    }
+};
+
+const Entry = union(enum) {
+    profile: *const Cfg.Profile,
+    common: Cfg.Server,
+    recent: *const Cfg.RecentEntry,
+};
+
+/// Interactive startup menu (cooked stdin, before raw mode starts).
+/// Prints profiles first (favorites, then rest), then recent servers,
+/// then built-in servers, and resolves nick/realname for the pick.
+pub fn pick(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
+    var entries: std.ArrayList(Entry) = .empty;
+    defer entries.deinit(allocator);
+
+    // Favorites first, then other profiles (last-used profile first).
+    var favs: std.ArrayList(*const Cfg.Profile) = .empty;
+    defer favs.deinit(allocator);
+    var others: std.ArrayList(*const Cfg.Profile) = .empty;
+    defer others.deinit(allocator);
+    for (cfg.profiles.items) |*p| {
+        if (p.favorite) {
+            try favs.append(allocator, p);
+        } else {
+            try others.append(allocator, p);
+        }
+    }
+    if (cfg.last_profile) |last| {
+        for (others.items, 0..) |p, i| {
+            if (std.mem.eql(u8, p.name, last)) {
+                const moved = others.orderedRemove(i);
+                try entries.append(allocator, .{ .profile = moved });
+                break;
+            }
+        }
+    }
+    for (favs.items) |p| try entries.append(allocator, .{ .profile = p });
+    for (others.items) |p| try entries.append(allocator, .{ .profile = p });
+    for (cfg.recent.items) |*r| {
+        if (r.host.len == 0) continue;
+        try entries.append(allocator, .{ .recent = r });
+    }
+    for (Cfg.common_servers) |s| {
+        if (alreadyListed(entries.items, s.host, s.port)) continue;
+        try entries.append(allocator, .{ .common = s });
+    }
+
+    std.debug.print("\n{s}where to?{s}\n", .{ "\x1b[1m", "\x1b[0m" });
+    for (entries.items, 0..) |e, i| {
+        switch (e) {
+            .profile => |p| {
+                const star = if (p.favorite) " ★" else "";
+                const last = if (cfg.last_profile) |l| (if (std.mem.eql(u8, l, p.name)) " [last]" else "") else "";
+                std.debug.print("  {d}) {s} — {s} @ {s}:{d}{s}{s}\n", .{ i + 1, p.name, p.nick, p.host, p.port, star, last });
+            },
+            .recent => |r| {
+                std.debug.print("  {d}) {s}:{d} (recent{s}{s})\n", .{ i + 1, r.host, r.port, if (r.nick.len > 0) ", nick " else "", r.nick });
+            },
+            .common => |s| {
+                std.debug.print("  {d}) {s}:{d}\n", .{ i + 1, s.host, s.port });
+            },
+        }
+    }
+    std.debug.print("  n) new connection…\n", .{});
+    std.debug.print("choice [1]: ", .{});
+
+    const raw_choice = try readLine(allocator);
+    defer allocator.free(raw_choice);
+    const trimmed = std.mem.trim(u8, raw_choice, " \r\n\t");
+
+    if (trimmed.len == 0) {
+        if (entries.items.len > 0) return resolveEntry(cfg, allocator, entries.items[0]);
+        return resolveNew(cfg, allocator);
+    }
+    if (trimmed.len == 1 and (trimmed[0] == 'n' or trimmed[0] == 'N')) {
+        return resolveNew(cfg, allocator);
+    }
+    const n = std.fmt.parseInt(usize, trimmed, 10) catch {
+        std.debug.print("invalid choice, starting over with defaults.\n", .{});
+        return resolveEntry(cfg, allocator, entries.items[0]);
+    };
+    if (n == 0 or n > entries.items.len) {
+        std.debug.print("out of range, starting over with defaults.\n", .{});
+        return resolveEntry(cfg, allocator, entries.items[0]);
+    }
+    return resolveEntry(cfg, allocator, entries.items[n - 1]);
+}
+
+fn alreadyListed(entries: []const Entry, host: []const u8, port: u16) bool {
+    for (entries) |e| {
+        switch (e) {
+            .profile => |p| {
+                if (p.port == port and std.mem.eql(u8, p.host, host)) return true;
+            },
+            .recent => |r| {
+                if (r.port == port and std.mem.eql(u8, r.host, host)) return true;
+            },
+            .common => {},
+        }
+    }
+    return false;
+}
+
+fn resolveEntry(cfg: *Cfg.Config, allocator: std.mem.Allocator, entry: Entry) !Choice {
+    switch (entry) {
+        .profile => |p| {
+            return .{
+                .allocator = allocator,
+                .host = try allocator.dupe(u8, p.host),
+                .port = p.port,
+                .nick = try allocator.dupe(u8, p.nick),
+                .realname = try allocator.dupe(u8, p.realname),
+                .profile_name = try allocator.dupe(u8, p.name),
+            };
+        },
+        .recent => |r| {
+            const nick = if (r.nick.len > 0) r.nick else defaultNick(cfg);
+            const picked_nick = try ask(allocator, "nick", nick);
+            const realname = try ask(allocator, "realname", picked_nick);
+            return .{
+                .allocator = allocator,
+                .host = try allocator.dupe(u8, r.host),
+                .port = r.port,
+                .nick = picked_nick,
+                .realname = realname,
+            };
+        },
+        .common => |s| {
+            const picked_nick = try ask(allocator, "nick", defaultNick(cfg));
+            const realname = try ask(allocator, "realname", picked_nick);
+            return .{
+                .allocator = allocator,
+                .host = try allocator.dupe(u8, s.host),
+                .port = s.port,
+                .nick = picked_nick,
+                .realname = realname,
+            };
+        },
+    }
+}
+
+fn resolveNew(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
+    const host = try ask(allocator, "server", Cfg.common_servers[0].host);
+    const port_str = try ask(allocator, "port", "6667");
+    defer allocator.free(port_str);
+    const port = std.fmt.parseInt(u16, std.mem.trim(u8, port_str, " "), 10) catch 6667;
+    const nick = try ask(allocator, "nick", defaultNick(cfg));
+    const realname = try ask(allocator, "realname", nick);
+
+    var choice = Choice{
+        .allocator = allocator,
+        .host = host,
+        .port = port,
+        .nick = nick,
+        .realname = realname,
+    };
+    const name = try ask(allocator, "save as profile (empty to skip)", "");
+    defer allocator.free(name);
+    if (name.len > 0) {
+        const profile = Cfg.Profile{
+            .name = try allocator.dupe(u8, name),
+            .nick = try allocator.dupe(u8, choice.nick),
+            .realname = try allocator.dupe(u8, choice.realname),
+            .host = try allocator.dupe(u8, choice.host),
+            .port = choice.port,
+            .favorite = false,
+        };
+        try cfg.upsertProfile(profile);
+        choice.profile_name = try allocator.dupe(u8, name);
+        std.debug.print("saved profile '{s}'.\n", .{name});
+    }
+    return choice;
+}
+
+pub fn defaultNick(cfg: *const Cfg.Config) []const u8 {
+    if (cfg.last_profile) |last| {
+        if (cfg.findProfile(last)) |p| return p.nick;
+    }
+    if (cfg.recent.items.len > 0 and cfg.recent.items[0].nick.len > 0) {
+        return cfg.recent.items[0].nick;
+    }
+    return "guest";
+}
+
+/// Prompt for a value on cooked stdin; empty input keeps `default`.
+/// Returns an owned string.
+pub fn ask(allocator: std.mem.Allocator, prompt: []const u8, default: []const u8) ![]u8 {
+    std.debug.print("{s} [{s}]: ", .{ prompt, default });
+    const raw = try readLine(allocator);
+    defer allocator.free(raw);
+    const trimmed = std.mem.trim(u8, raw, " \r\n\t");
+    if (trimmed.len == 0) return allocator.dupe(u8, default);
+    return allocator.dupe(u8, trimmed);
+}
+
+fn readLine(allocator: std.mem.Allocator) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    // One byte at a time: a single read() may return several lines, and any
+    // bytes past the first '\n' belong to the *next* prompt, so they must
+    // not be swallowed here (piped input arrives all at once).
+    var one: [1]u8 = undefined;
+    while (true) {
+        const n = try std.posix.read(std.posix.STDIN_FILENO, &one);
+        if (n == 0) break; // EOF
+        if (one[0] == '\n') break;
+        try out.append(allocator, one[0]);
+    }
+    return out.toOwnedSlice(allocator);
+}
