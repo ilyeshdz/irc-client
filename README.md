@@ -1,58 +1,45 @@
 # irc-client
 
-A small IRC client written in Zig. This is a personal project, made to learn
-Zig one step at a time. Nothing fancy, just a simple client that works.
+A small IRC client in Zig. It's a side project for learning Zig and for
+remembering what chatting on the internet used to feel like.
 
-Right now it covers the foundations: connecting to a server, introducing
-yourself, sending and receiving messages, and answering `PING` with `PONG` to
-stay alive. MOTD support (commands 375, 372, 376) is implemented.
+No frameworks, no dependencies. Just sockets and the IRC protocol.
 
 ## Running it
 
-You'll need [Zig](https://ziglang.org/) installed:
+Needs [Zig](https://ziglang.org/):
 
 ```sh
-zig build run
+zig build run                  # picker with profiles and some common servers
+zig build run -- --profile home
+zig build run -- local         # local test server
 ```
 
-Without arguments it shows a picker: saved profiles first (last used on top,
-favorites starred), then recently used servers, then a few common servers.
-Pick a number, or `n` for a new connection (which you can save as a profile).
+First launch shows a small picker: your saved profiles, then recently used
+servers, then a few well-known ones. Pick a number, or `n` to save a new
+connection as a profile. Profiles live in `~/.config/irc-client/config` as
+plain JSON.
+
+In the client, `/help` lists what's implemented: joining channels, private
+messages, topics, whois, kicks, modes, away. Your own messages echo back, and
+server errors show up instead of disappearing.
+
+## Local server
+
+There's a docker compose file in the repo so you don't have to bother a real
+network while hacking:
 
 ```sh
-zig build run -- --profile home   # connect with a saved profile
-zig build run -- local             # quick path to 127.0.0.1:6667
-zig build run -- irc.libera.chat  # quick path to another host
+docker-compose up -d    # Ergo on port 6667
+zig build run -- local
 ```
 
-Profiles and recent servers are stored as JSON in
-`~/.config/irc-client/config`.
+Open a second terminal with another nickname and you can test messaging,
+kicks, invites and topics against yourself.
 
-## Test Server (local IRC)
+## TODO
 
-A Docker Compose setup is provided for a local InspIRCd server:
+User tracking, channel state, message history. Possibly splitting the
+protocol handling into its own library at some point.
 
-```sh
-# Start the test server (requires Docker)
-docker-compose up -d
-
-# Run the client against local server
-zig build run
-# Then edit src/main.zig to connect to 127.0.0.1:6667 instead of irc.ircnet.com
-
-# Stop the test server
-docker-compose down
-```
-
-The server runs on ports 6667 (plain) and 6697 (SSL). Configuration and MOTD files are in the project root.
-
-## What's next
-
-- Parsing the IRC protocol
-- Handling IRC commands and events
-- Tracking users and their state
-- Maybe becoming a library one day
-
-No promises beyond that. It's a fun learning project, and that's enough.
-
-Made with ❤️ by [@ilyeshdz](https://github.com/ilyeshdz)
+Made by [@ilyeshdz](https://github.com/ilyeshdz)
