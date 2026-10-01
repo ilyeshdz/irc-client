@@ -186,6 +186,19 @@ fn printHelp() void {
     std.debug.print("\n", .{});
 }
 
+/// Extract the next complete line from the stdin buffer, consuming it.
+/// Returns a slice of `out` without the trailing `\n`/`\r`, or null when
+/// no full line is buffered yet.
+fn takeLine(input_buffer: *[1024]u8, input_len: *usize, out: *[1024]u8) ?[]const u8 {
+    const newline_idx = std.mem.indexOfScalar(u8, input_buffer[0..input_len.*], '\n') orelse return null;
+    const clean = std.mem.trimEnd(u8, input_buffer[0..newline_idx], "\r");
+    @memcpy(out[0..clean.len], clean);
+    const remaining = input_len.* - (newline_idx + 1);
+    std.mem.copyForwards(u8, input_buffer[0..remaining], input_buffer[newline_idx + 1 .. input_len.*]);
+    input_len.* = remaining;
+    return out[0..clean.len];
+}
+
 pub fn runEventLoop(client: *IrcClient) !void {
     const stdin_fd = std.posix.STDIN_FILENO;
     const socket_fd = client.stream.socket.handle;
@@ -211,38 +224,28 @@ pub fn runEventLoop(client: *IrcClient) !void {
             }
             input_len += bytes_read;
 
-            // Process complete lines
-            while (true) {
-                if (std.mem.indexOfScalar(u8, input_buffer[0..input_len], '\n')) |newline_idx| {
-                    const line = input_buffer[0..newline_idx];
-                    // Remove trailing \r if present
-                    const clean_line = std.mem.trimEnd(u8, line, "\r");
-
-                    const cmd = Command.parse(clean_line, client.getCurrentChannel()) catch |err| {
-                        if (err == error.NoCurrentChannel) {
-                            std.debug.print("No current channel. Use /join first.\n", .{});
-                        } else if (err == error.MissingArgument) {
-                            std.debug.print("Missing argument.\n", .{});
-                        } else {
-                            std.debug.print("Parse error: {}\n", .{err});
-                        }
-                        continue;
-                    };
-
-                    if (cmd) |c| {
-                        if (c == .Quit) {
-                            try executeCommand(client, c);
-                            return;
-                        }
-                        try executeCommand(client, c);
+            // Process complete lines. Each line is copied out and consumed
+            // from the buffer *before* parsing, so a parse error can never
+            // re-trigger on the same line (infinite error spam).
+            var line_buf: [1024]u8 = undefined;
+            while (takeLine(&input_buffer, &input_len, &line_buf)) |clean_line| {
+                const cmd = Command.parse(clean_line, client.getCurrentChannel()) catch |err| {
+                    if (err == error.NoCurrentChannel) {
+                        std.debug.print("No current channel. Use /join first.\n", .{});
+                    } else if (err == error.MissingArgument) {
+                        std.debug.print("Missing argument.\n", .{});
+                    } else {
+                        std.debug.print("Parse error: {}\n", .{err});
                     }
+                    continue;
+                };
 
-                    // Shift remaining buffer
-                    const remaining = input_len - (newline_idx + 1);
-                    std.mem.copyForwards(u8, input_buffer[0..remaining], input_buffer[newline_idx + 1 .. input_len]);
-                    input_len = remaining;
-                } else {
-                    break;
+                if (cmd) |c| {
+                    if (c == .Quit) {
+                        try executeCommand(client, c);
+                        return;
+                    }
+                    try executeCommand(client, c);
                 }
             }
         }
@@ -291,4 +294,25 @@ test "parse nick/topic/names/whois/me commands" {
 
     try t.expectError(error.MissingArgument, Command.parse("/nick", null));
     try t.expectError(error.MissingArgument, Command.parse("/whois", null));
+}
+
+test "takeLine consumes each line exactly once" {
+    const t = std.testing;
+    var buf: [1024]u8 = undefined;
+    var out: [1024]u8 = undefined;
+    const data = "hello\n/join\n";
+    @memcpy(buf[0..data.len], data);
+    var len: usize = data.len;
+
+    const first = takeLine(&buf, &len, &out).?;
+    try t.expectEqualStrings("hello", first);
+    // The returned slice aliases `out`; copy it before the next call.
+    var first_copy: [16]u8 = undefined;
+    @memcpy(first_copy[0..first.len], first);
+
+    const second = takeLine(&buf, &len, &out).?;
+    try t.expectEqualStrings("/join", second);
+    try t.expectEqualStrings("hello", first_copy[0..first.len]);
+    try t.expectEqual(@as(usize, 0), len);
+    try t.expect(takeLine(&buf, &len, &out) == null);
 }
