@@ -14,6 +14,11 @@ pub const Command = union(enum) {
     Topic: struct { channel: []const u8, text: ?[]const u8 },
     Names: ?[]const u8,
     Whois: []const u8,
+    Who: []const u8,
+    Mode: struct { target: []const u8, modes: ?[]const u8 },
+    Kick: struct { channel: []const u8, nick: []const u8, reason: ?[]const u8 },
+    Invite: struct { nick: []const u8, channel: []const u8 },
+    Away: ?[]const u8,
     Me: struct { target: ?[]const u8, text: []const u8 },
     Unknown: []const u8,
 
@@ -75,6 +80,43 @@ pub const Command = union(enum) {
         } else if (std.mem.eql(u8, cmd, "whois") or std.mem.eql(u8, cmd, "w")) {
             const nick = nextToken(&args) orelse return error.MissingArgument;
             return Command{ .Whois = nick };
+        } else if (std.mem.eql(u8, cmd, "who")) {
+            const target = nextToken(&args) orelse {
+                if (current_channel) |chan| {
+                    if (chan.len == 0) return error.MissingArgument;
+                    return Command{ .Who = chan };
+                }
+                return error.MissingArgument;
+            };
+            return Command{ .Who = target };
+        } else if (std.mem.eql(u8, cmd, "mode")) {
+            const target = nextToken(&args) orelse {
+                if (current_channel) |chan| {
+                    if (chan.len == 0) return error.MissingArgument;
+                    return Command{ .Mode = .{ .target = chan, .modes = null } };
+                }
+                return error.MissingArgument;
+            };
+            const modes = restOrNull(&args);
+            return Command{ .Mode = .{ .target = target, .modes = modes } };
+        } else if (std.mem.eql(u8, cmd, "kick") or std.mem.eql(u8, cmd, "k")) {
+            const channel = nextToken(&args) orelse return error.MissingArgument;
+            const nick = nextToken(&args) orelse return error.MissingArgument;
+            const reason = restOrNull(&args);
+            return Command{ .Kick = .{ .channel = channel, .nick = nick, .reason = reason } };
+        } else if (std.mem.eql(u8, cmd, "invite") or std.mem.eql(u8, cmd, "i")) {
+            const nick = nextToken(&args) orelse return error.MissingArgument;
+            const channel = nextToken(&args) orelse {
+                if (current_channel) |chan| {
+                    if (chan.len == 0) return error.MissingArgument;
+                    return Command{ .Invite = .{ .nick = nick, .channel = chan } };
+                }
+                return error.MissingArgument;
+            };
+            return Command{ .Invite = .{ .nick = nick, .channel = channel } };
+        } else if (std.mem.eql(u8, cmd, "away")) {
+            const message = restOrNull(&args);
+            return Command{ .Away = message };
         } else if (std.mem.eql(u8, cmd, "me")) {
             const text = restOrNull(&args) orelse return error.MissingArgument;
             return Command{ .Me = .{ .target = current_channel, .text = text } };
@@ -147,6 +189,25 @@ pub fn executeCommand(client: *IrcClient, cmd: Command) !void {
         .Whois => |nick| {
             try client.whois(nick);
         },
+        .Who => |target| {
+            try client.who(target);
+        },
+        .Mode => |mo| {
+            if (mo.modes) |modes| {
+                try client.setMode(mo.target, modes);
+            } else {
+                try client.requestMode(mo.target);
+            }
+        },
+        .Kick => |k| {
+            try client.kick(k.channel, k.nick, k.reason);
+        },
+        .Invite => |inv| {
+            try client.invite(inv.nick, inv.channel);
+        },
+        .Away => |message| {
+            try client.away(message);
+        },
         .Me => |m| {
             const target = m.target orelse {
                 std.debug.print("No current channel. Use /join first.\n", .{});
@@ -179,6 +240,11 @@ fn printHelp() void {
     std.debug.print("  /topic [chan] [text]     - Show or set topic (alias: /t)\n", .{});
     std.debug.print("  /names [channel]         - List users in a channel\n", .{});
     std.debug.print("  /whois <nick>            - Show info about a user (alias: /w)\n", .{});
+    std.debug.print("  /who [channel]           - List users with details\n", .{});
+    std.debug.print("  /mode [target] [modes]   - Show or change modes\n", .{});
+    std.debug.print("  /kick <chan> <nick> [r]  - Kick a user (alias: /k)\n", .{});
+    std.debug.print("  /invite <nick> [chan]    - Invite a user (alias: /i)\n", .{});
+    std.debug.print("  /away [message]          - Set or clear away status\n", .{});
     std.debug.print("  /list                    - List channels (alias: /l)\n", .{});
     std.debug.print("  /raw <cmd> [params]      - Send raw IRC command (alias: /r)\n", .{});
     std.debug.print("  /quit [reason]           - Disconnect from server (alias: /q)\n", .{});
@@ -330,6 +396,47 @@ test "parse nick/topic/names/whois/me commands" {
 
     try t.expectError(error.MissingArgument, Command.parse("/nick", null));
     try t.expectError(error.MissingArgument, Command.parse("/whois", null));
+}
+
+test "parse who/mode/kick/invite/away commands" {
+    const t = std.testing;
+    const cmd_who = (try Command.parse("/who #zig", null)).?;
+    try t.expectEqualStrings("#zig", cmd_who.Who);
+
+    const cmd_who_default = (try Command.parse("/who", "#zig")).?;
+    try t.expectEqualStrings("#zig", cmd_who_default.Who);
+
+    const cmd_mode_show = (try Command.parse("/mode #zig", null)).?;
+    try t.expectEqualStrings("#zig", cmd_mode_show.Mode.target);
+    try t.expect(cmd_mode_show.Mode.modes == null);
+
+    const cmd_mode_set = (try Command.parse("/mode #zig +o alice", null)).?;
+    try t.expectEqualStrings("+o alice", cmd_mode_set.Mode.modes.?);
+
+    const cmd_kick = (try Command.parse("/kick #zig bob bye now", null)).?;
+    try t.expectEqualStrings("#zig", cmd_kick.Kick.channel);
+    try t.expectEqualStrings("bob", cmd_kick.Kick.nick);
+    try t.expectEqualStrings("bye now", cmd_kick.Kick.reason.?);
+
+    const cmd_kick_short = (try Command.parse("/k #zig bob", null)).?;
+    try t.expect(cmd_kick_short.Kick.reason == null);
+
+    const cmd_invite = (try Command.parse("/invite bob #zig", null)).?;
+    try t.expectEqualStrings("bob", cmd_invite.Invite.nick);
+    try t.expectEqualStrings("#zig", cmd_invite.Invite.channel);
+
+    const cmd_invite_default = (try Command.parse("/invite bob", "#zig")).?;
+    try t.expectEqualStrings("#zig", cmd_invite_default.Invite.channel);
+
+    const cmd_away = (try Command.parse("/away lunch break", null)).?;
+    try t.expectEqualStrings("lunch break", cmd_away.Away.?);
+
+    const cmd_back = (try Command.parse("/away", null)).?;
+    try t.expect(cmd_back.Away == null);
+
+    try t.expectError(error.MissingArgument, Command.parse("/who", null));
+    try t.expectError(error.MissingArgument, Command.parse("/kick #zig", null));
+    try t.expectError(error.MissingArgument, Command.parse("/invite", null));
 }
 
 test "takeLine consumes each line exactly once" {

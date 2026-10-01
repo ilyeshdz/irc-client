@@ -108,6 +108,54 @@ pub const IrcClient = struct {
         try self.send(Message{ .command = "WHOIS", .params = .{nick} ++ .{""} ** 14 });
     }
 
+    /// Request WHO info about a channel or nick mask.
+    pub fn who(self: *IrcClient, target: []const u8) !void {
+        try self.send(Message{ .command = "WHO", .params = .{target} ++ .{""} ** 14 });
+    }
+
+    /// Request the modes of a channel (or nick).
+    pub fn requestMode(self: *IrcClient, target: []const u8) !void {
+        try self.send(Message{ .command = "MODE", .params = .{target} ++ .{""} ** 14 });
+    }
+
+    /// Set modes on a target, e.g. `/mode #zig +o alice`.
+    pub fn setMode(self: *IrcClient, target: []const u8, modes: []const u8) !void {
+        var first: []const u8 = modes;
+        var rest: []const u8 = "";
+        if (std.mem.indexOfScalar(u8, modes, ' ')) |i| {
+            first = modes[0..i];
+            rest = std.mem.trimStart(u8, modes[i + 1 ..], " ");
+        }
+        if (rest.len > 0) {
+            try self.send(Message{ .command = "MODE", .params = .{ target, first, rest } ++ .{""} ** 12 });
+        } else {
+            try self.send(Message{ .command = "MODE", .params = .{ target, first } ++ .{""} ** 13 });
+        }
+    }
+
+    /// Kick a nick from a channel with an optional reason.
+    pub fn kick(self: *IrcClient, channel: []const u8, nick: []const u8, reason: ?[]const u8) !void {
+        if (reason) |r| {
+            try self.send(Message{ .command = "KICK", .params = .{ channel, nick } ++ .{""} ** 13, .trailing = r });
+        } else {
+            try self.send(Message{ .command = "KICK", .params = .{ channel, nick } ++ .{""} ** 13 });
+        }
+    }
+
+    /// Invite a nick to a channel.
+    pub fn invite(self: *IrcClient, nick: []const u8, channel: []const u8) !void {
+        try self.send(Message{ .command = "INVITE", .params = .{ nick, channel } ++ .{""} ** 13 });
+    }
+
+    /// Set yourself away (no message clears the away status).
+    pub fn away(self: *IrcClient, message: ?[]const u8) !void {
+        if (message) |m| {
+            try self.send(Message{ .command = "AWAY", .trailing = m });
+        } else {
+            try self.send(Message{ .command = "AWAY" });
+        }
+    }
+
     /// Send a /me action (CTCP ACTION) to a target.
     pub fn sendAction(self: *IrcClient, target: []const u8, text: []const u8) !void {
         var buf: [512]u8 = undefined;

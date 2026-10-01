@@ -118,6 +118,12 @@ pub const Display = struct {
             self.handlePart(msg);
         } else if (isCmd(msg, "QUIT")) {
             self.handleQuit(msg);
+        } else if (isCmd(msg, "KICK")) {
+            self.handleKick(msg);
+        } else if (isCmd(msg, "MODE")) {
+            self.handleMode(msg);
+        } else if (isCmd(msg, "INVITE")) {
+            self.handleInvite(msg);
         } else if (isCmd(msg, "NICK")) {
             self.handleNick(msg);
         } else if (isCmd(msg, "PRIVMSG")) {
@@ -136,6 +142,20 @@ pub const Display = struct {
             isCmd(msg, "317") or isCmd(msg, "318") or isCmd(msg, "319") or isCmd(msg, "301"))
         {
             self.handleWhois(msg);
+        } else if (isCmd(msg, "352")) {
+            self.handleWhoLine(msg);
+        } else if (isCmd(msg, "315")) {
+            self.handleEndOfWho(msg);
+        } else if (isCmd(msg, "324")) {
+            self.handleChannelMode(msg);
+        } else if (isCmd(msg, "329")) {
+            self.handleChannelCreated(msg);
+        } else if (isCmd(msg, "341")) {
+            self.handleInviteConfirm(msg);
+        } else if (isCmd(msg, "305")) {
+            line("You are no longer marked as away\n", .{});
+        } else if (isCmd(msg, "306")) {
+            line("You are now marked as away\n", .{});
         } else if (isCmd(msg, "001")) {
             if (fmt.isEnabled()) {
                 std.debug.print("{s}✓ connected{s} {s}\n", .{ fmt.green, fmt.reset, msg.trailing });
@@ -326,6 +346,15 @@ pub const Display = struct {
         return it.next() orelse prefix;
     }
 
+    /// Reason text for commands like KICK/PART/QUIT/TOPIC: servers may send a
+    /// single-word reason *without* the ':' prefix, in which case the parser
+    /// leaves it in params[idx] instead of trailing.
+    fn reasonOf(msg: Message, idx: usize) []const u8 {
+        if (msg.trailing.len > 0) return msg.trailing;
+        if (idx < msg.params.len) return msg.params[idx];
+        return "";
+    }
+
     fn isChannelTarget(target: []const u8) bool {
         return std.mem.startsWith(u8, target, "#") or std.mem.startsWith(u8, target, "&");
     }
@@ -363,10 +392,10 @@ pub const Display = struct {
                 if (self.current_channel) |current| {
                     if (std.mem.eql(u8, current, channel)) self.setCurrentChannel(null) catch {};
                 }
-            } else if (msg.trailing.len > 0) {
+            } else if (reasonOf(msg, 1).len > 0) {
                 var nb: [256]u8 = undefined;
                 var chb: [256]u8 = undefined;
-                event("{s} left {s} ({s})\n", .{ fmt.paintNick(nick, &nb), fmt.paintChannel(channel, &chb), msg.trailing });
+                event("{s} left {s} ({s})\n", .{ fmt.paintNick(nick, &nb), fmt.paintChannel(channel, &chb), reasonOf(msg, 1) });
             } else {
                 var nb: [256]u8 = undefined;
                 var chb: [256]u8 = undefined;
@@ -379,11 +408,98 @@ pub const Display = struct {
         const prefix = msg.prefix orelse return;
         const nick = nickOnly(prefix);
         var nb: [256]u8 = undefined;
-        if (msg.trailing.len > 0) {
-            event("{s} quit ({s})\n", .{ fmt.paintNick(nick, &nb), msg.trailing });
+        if (reasonOf(msg, 0).len > 0) {
+            event("{s} quit ({s})\n", .{ fmt.paintNick(nick, &nb), reasonOf(msg, 0) });
         } else {
             event("{s} quit\n", .{fmt.paintNick(nick, &nb)});
         }
+    }
+
+    fn handleKick(self: *Display, msg: Message) void {
+        const prefix = msg.prefix orelse return;
+        const kicker = nickOnly(prefix);
+        const channel = msg.params[0];
+        const target = msg.params[1];
+        if (channel.len == 0 or target.len == 0) return;
+        var kb: [256]u8 = undefined;
+        var tb: [256]u8 = undefined;
+        var chb: [256]u8 = undefined;
+        if (reasonOf(msg, 2).len > 0) {
+            event("{s} kicked {s} from {s} ({s})\n", .{
+                fmt.paintNick(kicker, &kb),
+                fmt.paintNick(target, &tb),
+                fmt.paintChannel(channel, &chb),
+                reasonOf(msg, 2),
+            });
+        } else {
+            event("{s} kicked {s} from {s}\n", .{
+                fmt.paintNick(kicker, &kb),
+                fmt.paintNick(target, &tb),
+                fmt.paintChannel(channel, &chb),
+            });
+        }
+        // We were kicked: stop targeting this channel.
+        if (self.current_nick) |my_nick| {
+            if (std.mem.eql(u8, target, my_nick)) {
+                if (self.current_channel) |current| {
+                    if (std.mem.eql(u8, current, channel)) self.setCurrentChannel(null) catch {};
+                }
+            }
+        }
+    }
+
+    fn handleMode(_: *Display, msg: Message) void {
+        const target = msg.params[0];
+        const modes = msg.params[1];
+        if (target.len == 0 or modes.len == 0) return;
+        var argb: [256]u8 = undefined;
+        const args = joinParams(msg.params[2..], &argb);
+        if (msg.prefix) |prefix| {
+            const nick = nickOnly(prefix);
+            var nb: [256]u8 = undefined;
+            if (args.len > 0) {
+                event("{s} set mode {s} {s} on {s}\n", .{ fmt.paintNick(nick, &nb), modes, args, target });
+            } else {
+                event("{s} set mode {s} on {s}\n", .{ fmt.paintNick(nick, &nb), modes, target });
+            }
+        } else if (args.len > 0) {
+            line("Mode {s} {s} on {s}\n", .{ modes, args, target });
+        } else {
+            line("Mode {s} on {s}\n", .{ modes, target });
+        }
+    }
+
+    fn handleInvite(self: *Display, msg: Message) void {
+        const prefix = msg.prefix orelse return;
+        const nick = nickOnly(prefix);
+        // INVITE params: [me, channel] on most servers (target first on some).
+        const channel = if (msg.params[1].len > 0) msg.params[1] else msg.trailing;
+        if (channel.len == 0) return;
+        var nb: [256]u8 = undefined;
+        var chb: [256]u8 = undefined;
+        _ = self;
+        event("{s} invited you to {s} — /join {s} to accept\n", .{
+            fmt.paintNick(nick, &nb),
+            fmt.paintChannel(channel, &chb),
+            channel,
+        });
+    }
+
+    /// Join space-separated params (skipping empties) for MODE display.
+    fn joinParams(params: []const []const u8, out: *[256]u8) []const u8 {
+        var len: usize = 0;
+        for (params) |p| {
+            if (p.len == 0) continue;
+            const sep: usize = if (len > 0) 1 else 0;
+            if (len + sep + p.len > out.len) break;
+            if (sep > 0) {
+                out[len] = ' ';
+                len += 1;
+            }
+            @memcpy(out[len .. len + p.len], p);
+            len += p.len;
+        }
+        return out[0..len];
     }
 
     fn handleNick(self: *Display, msg: Message) void {
@@ -463,7 +579,7 @@ pub const Display = struct {
         if (channel.len == 0) return;
         var chb: [256]u8 = undefined;
         var nb: [256]u8 = undefined;
-        event("Topic for {s} changed by {s}: {s}\n", .{ fmt.paintChannel(channel, &chb), fmt.paintNick(nickOnly(prefix), &nb), msg.trailing });
+        event("Topic for {s} changed by {s}: {s}\n", .{ fmt.paintChannel(channel, &chb), fmt.paintNick(nickOnly(prefix), &nb), reasonOf(msg, 1) });
     }
 
     fn handleTopicReply(_: *Display, msg: Message) void {
@@ -520,6 +636,72 @@ pub const Display = struct {
             line("• {s} is away: {s}\n", .{ styled_nick, msg.trailing });
         } else if (std.mem.eql(u8, msg.command, "318")) {
             line("End of /whois for {s}\n", .{styled_nick});
+        }
+    }
+
+    fn handleWhoLine(_: *Display, msg: Message) void {
+        // 352 params: [me, channel, user, host, server, nick, flags] + hopcount realname
+        const nick = msg.params[5];
+        if (nick.len == 0) return;
+        var nb: [256]u8 = undefined;
+        const flags = msg.params[6];
+        const away = std.mem.indexOfScalar(u8, flags, 'G') != null;
+        if (msg.trailing.len > 0) {
+            line("• {s} {s}@{s} [{s}]{s}\n", .{
+                fmt.paintNick(nick, &nb),
+                msg.params[2],
+                msg.params[3],
+                flags,
+                if (away) " (away)" else "",
+            });
+        } else {
+            line("• {s} [{s}]{s}\n", .{ fmt.paintNick(nick, &nb), flags, if (away) " (away)" else "" });
+        }
+    }
+
+    fn handleEndOfWho(_: *Display, msg: Message) void {
+        // 315 params: [me, target]
+        if (msg.params[1].len == 0) return;
+        line("End of /who for {s}\n", .{msg.params[1]});
+    }
+
+    fn handleChannelMode(_: *Display, msg: Message) void {
+        // 324 params: [me, channel, modes, ...args]
+        const channel = msg.params[1];
+        const modes = msg.params[2];
+        if (channel.len == 0) return;
+        var chb: [256]u8 = undefined;
+        var argb: [256]u8 = undefined;
+        const args = joinParams(msg.params[3..], &argb);
+        if (modes.len > 0 and args.len > 0) {
+            line("Modes for {s}: {s} {s}\n", .{ fmt.paintChannel(channel, &chb), modes, args });
+        } else if (modes.len > 0) {
+            line("Modes for {s}: {s}\n", .{ fmt.paintChannel(channel, &chb), modes });
+        } else {
+            line("No modes set on {s}\n", .{fmt.paintChannel(channel, &chb)});
+        }
+    }
+
+    fn handleChannelCreated(_: *Display, msg: Message) void {
+        // 329 params: [me, channel, timestamp]
+        if (msg.params[1].len == 0) return;
+        var chb: [256]u8 = undefined;
+        if (msg.params[2].len > 0) {
+            line("{s} created at {s}\n", .{ fmt.paintChannel(msg.params[1], &chb), msg.params[2] });
+        }
+    }
+
+    fn handleInviteConfirm(_: *Display, msg: Message) void {
+        // 341 params: [me, nick, channel]
+        const nick = msg.params[1];
+        const channel = msg.params[2];
+        if (nick.len == 0) return;
+        var nb: [256]u8 = undefined;
+        if (channel.len > 0) {
+            var chb: [256]u8 = undefined;
+            line("{s} invited to {s}\n", .{ fmt.paintNick(nick, &nb), fmt.paintChannel(channel, &chb) });
+        } else {
+            line("{s} invited\n", .{fmt.paintNick(nick, &nb)});
         }
     }
 
@@ -588,6 +770,84 @@ test "send errors and local echo are displayed without crashing" {
     d.echoSent("#zig", "hello", false);
     d.echoSent("alice", "hi", false);
     d.echoSent("#zig", "waves", true);
+}
+
+test "being kicked clears the current channel" {
+    var d = try Display.init(std.testing.allocator);
+    defer d.deinit();
+    try d.setCurrentNick("tester");
+    try d.setCurrentChannel("#zig");
+    try d.handleServerMessage(.{
+        .prefix = "op!u@h",
+        .command = "KICK",
+        .params = .{ "#zig", "tester" } ++ .{""} ** 13,
+        .trailing = "bye",
+    });
+    try std.testing.expect(d.current_channel == null);
+}
+
+test "colon-less single-word reasons fall back to params" {
+    // Servers may send `KICK #c nick bye` without ':'; the parser then
+    // leaves "bye" in params[2] instead of trailing.
+    const parsed = try Message.parse("op!u@h KICK #zig bob bye");
+    try std.testing.expectEqualStrings("", parsed.trailing);
+    try std.testing.expectEqualStrings("bye", Display.reasonOf(parsed, 2));
+
+    const quit = try Message.parse("bob!u@h QUIT leaving");
+    try std.testing.expectEqualStrings("leaving", Display.reasonOf(quit, 0));
+
+    const part = try Message.parse("bob!u@h PART #zig ciao");
+    try std.testing.expectEqualStrings("ciao", Display.reasonOf(part, 1));
+}
+
+test "kick/mode/invite/who numerics display without crashing" {
+    var d = try Display.init(std.testing.allocator);
+    defer d.deinit();
+    try d.setCurrentNick("tester");
+    try d.handleServerMessage(.{
+        .prefix = "op!u@h",
+        .command = "KICK",
+        .params = .{ "#zig", "bob" } ++ .{""} ** 13,
+        .trailing = "spam",
+    });
+    try d.handleServerMessage(.{
+        .prefix = "op!u@h",
+        .command = "MODE",
+        .params = .{ "#zig", "+o", "bob" } ++ .{""} ** 12,
+    });
+    try d.handleServerMessage(.{
+        .prefix = "alice!u@h",
+        .command = "INVITE",
+        .params = .{ "tester", "#zig" } ++ .{""} ** 13,
+    });
+    try d.handleServerMessage(.{
+        .prefix = "test.local",
+        .command = "352",
+        .params = .{ "tester", "#zig", "u", "h", "srv", "bob", "H@" } ++ .{""} ** 8,
+        .trailing = "0 Bob",
+    });
+    try d.handleServerMessage(.{
+        .prefix = "test.local",
+        .command = "315",
+        .params = .{ "tester", "#zig" } ++ .{""} ** 13,
+        .trailing = "End of WHO",
+    });
+    try d.handleServerMessage(.{
+        .prefix = "test.local",
+        .command = "324",
+        .params = .{ "tester", "#zig", "+nt" } ++ .{""} ** 12,
+    });
+    try d.handleServerMessage(.{
+        .prefix = "test.local",
+        .command = "341",
+        .params = .{ "tester", "bob", "#zig" } ++ .{""} ** 12,
+    });
+    try d.handleServerMessage(.{
+        .prefix = "test.local",
+        .command = "306",
+        .params = .{"tester"} ++ .{""} ** 14,
+        .trailing = "You have been marked as being away",
+    });
 }
 
 test "refused LIST reports refusal instead of empty list" {
