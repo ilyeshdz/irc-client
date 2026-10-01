@@ -94,8 +94,16 @@ pub const Display = struct {
             self.handleNotice(msg);
         } else if (isCmd(msg, "TOPIC")) {
             self.handleTopic(msg);
+        } else if (isCmd(msg, "331")) {
+            self.handleNoTopic(msg);
         } else if (isCmd(msg, "332")) {
             self.handleTopicReply(msg);
+        } else if (isCmd(msg, "333")) {
+            self.handleTopicWhoTime(msg);
+        } else if (isCmd(msg, "311") or isCmd(msg, "312") or isCmd(msg, "313") or
+            isCmd(msg, "317") or isCmd(msg, "318") or isCmd(msg, "319") or isCmd(msg, "301"))
+        {
+            self.handleWhois(msg);
         } else if (isCmd(msg, "001")) {
             std.debug.print("Connected: {s}\n", .{msg.trailing});
         } else if (isCmd(msg, "002")) {
@@ -313,6 +321,15 @@ pub const Display = struct {
         const target = msg.params[0];
         if (target.len == 0) return;
 
+        if (parseAction(msg.trailing)) |action| {
+            if (isChannelTarget(target)) {
+                std.debug.print("[{s}] * {s} {s}\n", .{ target, nick, action });
+            } else {
+                std.debug.print("* {s} {s}\n", .{ nick, action });
+            }
+            return;
+        }
+
         if (isChannelTarget(target)) {
             std.debug.print("[{s}] <{s}> {s}\n", .{ target, nick, msg.trailing });
         } else if (self.current_nick) |my_nick| {
@@ -359,6 +376,61 @@ pub const Display = struct {
         } else {
             std.debug.print("No topic set for {s}\n", .{msg.params[1]});
         }
+    }
+
+    fn handleNoTopic(_: *Display, msg: Message) void {
+        // params: [nick, channel]
+        if (msg.params[1].len == 0) return;
+        std.debug.print("No topic set for {s}\n", .{msg.params[1]});
+    }
+
+    fn handleTopicWhoTime(_: *Display, msg: Message) void {
+        // params: [nick, channel, set-by, timestamp]
+        if (msg.params[1].len == 0) return;
+        const set_by = msg.params[2];
+        const when = msg.params[3];
+        if (set_by.len > 0 and when.len > 0) {
+            std.debug.print("Topic for {s} set by {s} at {s}\n", .{ msg.params[1], set_by, when });
+        } else if (set_by.len > 0) {
+            std.debug.print("Topic for {s} set by {s}\n", .{ msg.params[1], set_by });
+        }
+    }
+
+    fn handleWhois(_: *Display, msg: Message) void {
+        // params[1] is the queried nick for all these numerics.
+        const nick = msg.params[1];
+        if (std.mem.eql(u8, msg.command, "311")) {
+            // [me, nick, user, host] + realname
+            std.debug.print("{s} is {s}@{s} ({s})\n", .{ nick, msg.params[2], msg.params[3], msg.trailing });
+        } else if (std.mem.eql(u8, msg.command, "312")) {
+            // [me, nick, server] + server info
+            std.debug.print("{s} on {s} ({s})\n", .{ nick, msg.params[2], msg.trailing });
+        } else if (std.mem.eql(u8, msg.command, "313")) {
+            std.debug.print("{s} {s}\n", .{ nick, msg.trailing });
+        } else if (std.mem.eql(u8, msg.command, "317")) {
+            // [me, nick, idle-secs] + signon info in trailing
+            std.debug.print("{s} idle {s}s {s}\n", .{ nick, msg.params[2], msg.trailing });
+        } else if (std.mem.eql(u8, msg.command, "319")) {
+            std.debug.print("{s} on {s}\n", .{ nick, msg.trailing });
+        } else if (std.mem.eql(u8, msg.command, "301")) {
+            std.debug.print("{s} is away: {s}\n", .{ nick, msg.trailing });
+        } else if (std.mem.eql(u8, msg.command, "318")) {
+            if (msg.trailing.len > 0) {
+                std.debug.print("End of /whois for {s}\n", .{nick});
+            } else {
+                std.debug.print("End of /whois for {s}\n", .{nick});
+            }
+        }
+    }
+
+    fn parseAction(trailing: []const u8) ?[]const u8 {
+        // CTCP ACTION is wrapped in \x01...\x01
+        if (trailing.len < 9) return null;
+        if (trailing[0] != 0x01 or trailing[trailing.len - 1] != 0x01) return null;
+        const inner = trailing[1 .. trailing.len - 1];
+        const prefix = "ACTION ";
+        if (!std.mem.startsWith(u8, inner, prefix)) return null;
+        return inner[prefix.len..];
     }
 };
 

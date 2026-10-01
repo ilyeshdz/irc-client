@@ -77,6 +77,42 @@ pub const IrcClient = struct {
         try self.sendRaw("list", "");
     }
 
+    /// Change nickname.
+    pub fn changeNick(self: *IrcClient, nick: []const u8) !void {
+        try self.send(Message{ .command = "NICK", .params = .{nick} ++ .{""} ** 14 });
+    }
+
+    /// Request the topic of a channel.
+    pub fn requestTopic(self: *IrcClient, channel: []const u8) !void {
+        try self.send(Message{ .command = "TOPIC", .params = .{channel} ++ .{""} ** 14 });
+    }
+
+    /// Set the topic of a channel.
+    pub fn setTopic(self: *IrcClient, channel: []const u8, text: []const u8) !void {
+        try self.send(Message{ .command = "TOPIC", .params = .{channel} ++ .{""} ** 14, .trailing = text });
+    }
+
+    /// Request the user list of a channel (or all visible users if null).
+    pub fn requestNames(self: *IrcClient, channel: ?[]const u8) !void {
+        if (channel) |ch| {
+            try self.send(Message{ .command = "NAMES", .params = .{ch} ++ .{""} ** 14 });
+        } else {
+            try self.send(Message{ .command = "NAMES" });
+        }
+    }
+
+    /// Request WHOIS info about a nick.
+    pub fn whois(self: *IrcClient, nick: []const u8) !void {
+        try self.send(Message{ .command = "WHOIS", .params = .{nick} ++ .{""} ** 14 });
+    }
+
+    /// Send a /me action (CTCP ACTION) to a target.
+    pub fn sendAction(self: *IrcClient, target: []const u8, text: []const u8) !void {
+        var buf: [512]u8 = undefined;
+        const action = try std.fmt.bufPrint(&buf, "\x01ACTION {s}\x01", .{text});
+        try self.send(Message{ .command = "PRIVMSG", .params = .{target} ++ .{""} ** 14, .trailing = action });
+    }
+
     /// Send a message to a target (channel or user).
     pub fn sendMessage(self: *IrcClient, target: []const u8, text: []const u8) !void {
         try self.send(Message{ .command = "PRIVMSG", .params = .{target} ++ .{""} ** 14, .trailing = text });
