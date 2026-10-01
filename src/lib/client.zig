@@ -74,7 +74,7 @@ pub const IrcClient = struct {
     /// Request the server's channel list.
     pub fn listChannels(self: *IrcClient) !void {
         self.display.beginList();
-        try self.sendRaw("list", &[_:0]u8{});
+        try self.sendRaw("list", "");
     }
 
     /// Send a message to a target (channel or user).
@@ -113,9 +113,14 @@ pub const IrcClient = struct {
         try self.display.setCurrentChannel(channel);
     }
 
-    /// Get the current channel.
+    /// Get the current channel (null when not in a channel;
+    /// never returns an empty slice).
     pub fn getCurrentChannel(self: *IrcClient) ?[]const u8 {
-        return self.current_channel;
+        if (self.current_channel) |c| {
+            if (c.len == 0) return null;
+            return c;
+        }
+        return null;
     }
 
     fn ensureReader(self: *IrcClient) *net.Stream.Reader {

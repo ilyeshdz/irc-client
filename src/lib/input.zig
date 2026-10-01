@@ -112,7 +112,7 @@ pub fn executeCommand(client: *IrcClient, cmd: Command) !void {
 fn printHelp() void {
     std.debug.print("\nAvailable commands:\n", .{});
     std.debug.print("  /join <channel>     - Join a channel (alias: /j)\n", .{});
-    std.debug.print("  /part [channel] [reason] - Leave a channel (alias: /p)\n", .{});
+    std.debug.print("  /part <channel> [reason] - Leave a channel (alias: /p)\n", .{});
     std.debug.print("  /msg <target> <text> - Send a message (alias: /m)\n", .{});
     std.debug.print("  /list               - List channels (alias: /l)\n", .{});
     std.debug.print("  /raw <cmd> [params] - Send raw IRC command (alias: /r)\n", .{});
