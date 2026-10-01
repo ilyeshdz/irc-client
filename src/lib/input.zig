@@ -1,5 +1,6 @@
 const std = @import("std");
 const IrcClient = @import("client.zig").IrcClient;
+const InputBox = @import("inputbox.zig").InputBox;
 
 pub const Command = union(enum) {
     Join: []const u8,
@@ -212,56 +213,91 @@ pub fn runEventLoop(client: *IrcClient) !void {
     var input_buffer: [1024]u8 = undefined;
     var input_len: usize = 0;
 
+    var ibox = InputBox.init();
+    defer ibox.deinit();
+    if (ibox.raw) ibox.show(client.getCurrentChannel(), client.current_nick);
+
     while (true) {
         _ = try std.posix.poll(&poll_fds, -1);
 
         // Handle stdin input
         if (poll_fds[0].revents & std.posix.POLL.IN != 0) {
-            const bytes_read = try std.posix.read(stdin_fd, input_buffer[input_len..]);
-            if (bytes_read == 0) {
-                // EOF on stdin
-                break;
-            }
-            input_len += bytes_read;
-
-            // Process complete lines. Each line is copied out and consumed
-            // from the buffer *before* parsing, so a parse error can never
-            // re-trigger on the same line (infinite error spam).
-            var line_buf: [1024]u8 = undefined;
-            while (takeLine(&input_buffer, &input_len, &line_buf)) |clean_line| {
-                const cmd = Command.parse(clean_line, client.getCurrentChannel()) catch |err| {
-                    if (err == error.NoCurrentChannel) {
-                        std.debug.print("No current channel. Use /join first.\n", .{});
-                    } else if (err == error.MissingArgument) {
-                        std.debug.print("Missing argument.\n", .{});
-                    } else {
-                        std.debug.print("Parse error: {}\n", .{err});
+            if (ibox.raw) {
+                var tmp: [256]u8 = undefined;
+                const n = try std.posix.read(stdin_fd, &tmp);
+                for (tmp[0..n]) |b| {
+                    switch (ibox.feedByte(b)) {
+                        .none => {},
+                        .line => |submitted| {
+                            ibox.hide();
+                            if (try handleSubmittedLine(client, submitted)) return;
+                            ibox.show(client.getCurrentChannel(), client.current_nick);
+                        },
+                        .interrupt => {
+                            ibox.hide();
+                            try client.quit(null);
+                            return;
+                        },
+                        .eof => return,
                     }
-                    continue;
-                };
+                }
+                ibox.show(client.getCurrentChannel(), client.current_nick);
+            } else {
+                const bytes_read = try std.posix.read(stdin_fd, input_buffer[input_len..]);
+                if (bytes_read == 0) {
+                    // EOF on stdin
+                    break;
+                }
+                input_len += bytes_read;
 
-                if (cmd) |c| {
-                    if (c == .Quit) {
-                        try executeCommand(client, c);
-                        return;
-                    }
-                    try executeCommand(client, c);
+                // Process complete lines. Each line is copied out and consumed
+                // from the buffer *before* parsing, so a parse error can never
+                // re-trigger on the same line (infinite error spam).
+                var line_buf: [1024]u8 = undefined;
+                while (takeLine(&input_buffer, &input_len, &line_buf)) |clean_line| {
+                    if (try handleSubmittedLine(client, clean_line)) return;
                 }
             }
         }
 
         // Drain all complete server lines, including ones already sitting in
         // the Reader's userspace buffer (poll can't see those).
-        while (try client.hasCompleteLine(socket_fd)) {
-            _ = try client.readMessageInto(&read_buffer);
+        if (try client.hasCompleteLine(socket_fd)) {
+            ibox.hide();
+            while (try client.hasCompleteLine(socket_fd)) {
+                _ = try client.readMessageInto(&read_buffer);
+            }
+            ibox.show(client.getCurrentChannel(), client.current_nick);
         }
 
         // Handle socket errors/hangup
         if (poll_fds[1].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP) != 0) {
+            ibox.hide();
             std.debug.print("Connection lost\n", .{});
             break;
         }
     }
+}
+
+/// Parse and run one submitted input line.
+/// Returns true when the client should disconnect (Quit command).
+fn handleSubmittedLine(client: *IrcClient, clean_line: []const u8) !bool {
+    const cmd = Command.parse(clean_line, client.getCurrentChannel()) catch |err| {
+        if (err == error.NoCurrentChannel) {
+            std.debug.print("No current channel. Use /join first.\n", .{});
+        } else if (err == error.MissingArgument) {
+            std.debug.print("Missing argument.\n", .{});
+        } else {
+            std.debug.print("Parse error: {}\n", .{err});
+        }
+        return false;
+    };
+
+    if (cmd) |c| {
+        try executeCommand(client, c);
+        return c == .Quit;
+    }
+    return false;
 }
 
 test "parse nick/topic/names/whois/me commands" {
