@@ -1,5 +1,37 @@
 const std = @import("std");
 const Message = @import("message.zig").Message;
+const fmt = @import("format.zig");
+
+/// Print a normal line prefixed with a dim timestamp.
+fn line(comptime f: []const u8, args: anytype) void {
+    var tsb: [16]u8 = undefined;
+    var tss: [32]u8 = undefined;
+    std.debug.print("{s} ", .{fmt.dimTimestamp(&tsb, &tss)});
+    std.debug.print(f, args);
+}
+
+/// Print a channel event (join/part/quit/...) with a dim glyph prefix.
+fn event(comptime f: []const u8, args: anytype) void {
+    if (fmt.isEnabled()) {
+        var tsb: [16]u8 = undefined;
+        var tss: [32]u8 = undefined;
+        std.debug.print("{s} {s}*{s} ", .{ fmt.dimTimestamp(&tsb, &tss), fmt.dim, fmt.reset });
+        std.debug.print(f, args);
+    } else {
+        line("* " ++ f, args);
+    }
+}
+
+fn errLine(comptime f: []const u8, args: anytype) void {
+    if (fmt.isEnabled()) {
+        var tsb: [16]u8 = undefined;
+        var tss: [32]u8 = undefined;
+        std.debug.print("{s} {s}✗{s} ", .{ fmt.dimTimestamp(&tsb, &tss), fmt.red, fmt.reset });
+        std.debug.print(f, args);
+    } else {
+        line("error: " ++ f, args);
+    }
+}
 
 pub const Display = struct {
     allocator: std.mem.Allocator,
@@ -105,17 +137,24 @@ pub const Display = struct {
         {
             self.handleWhois(msg);
         } else if (isCmd(msg, "001")) {
-            std.debug.print("Connected: {s}\n", .{msg.trailing});
+            if (fmt.isEnabled()) {
+                std.debug.print("{s}✓ connected{s} {s}\n", .{ fmt.green, fmt.reset, msg.trailing });
+            } else {
+                line("Connected: {s}\n", .{msg.trailing});
+            }
         } else if (isCmd(msg, "002")) {
-            std.debug.print("  Host: {s}\n", .{msg.trailing});
+            line("Host: {s}\n", .{msg.trailing});
         } else if (isCmd(msg, "003")) {
-            std.debug.print("  Created: {s}\n", .{msg.trailing});
+            line("Created: {s}\n", .{msg.trailing});
         } else if (isCmd(msg, "004")) {
-            if (msg.params[0].len > 0) std.debug.print("  Server: {s}\n", .{msg.params[0]});
+            if (msg.params[0].len > 0) line("Server: {s}\n", .{msg.params[0]});
         } else if (isCmd(msg, "433")) {
-            if (msg.params[1].len > 0) std.debug.print("Nickname {s} is already in use\n", .{msg.params[1]});
+            if (msg.params[1].len > 0) {
+                var nb: [256]u8 = undefined;
+                errLine("Nickname {s} is already in use\n", .{fmt.paintNick(msg.params[1], &nb)});
+            }
         } else if (isCmd(msg, "461")) {
-            if (msg.params[1].len > 0) std.debug.print("{s}: not enough parameters\n", .{msg.params[1]});
+            if (msg.params[1].len > 0) errLine("{s}: not enough parameters\n", .{msg.params[1]});
         }
         // Other numerics/commands are ignored on purpose.
     }
@@ -152,20 +191,40 @@ pub const Display = struct {
 
     fn printMOTD(self: *Display) void {
         const motd = std.mem.trimEnd(u8, self.motd_buffer.items, "\n");
-        std.debug.print("\n--- MOTD ---\n", .{});
-        if (motd.len > 0) {
-            std.debug.print("{s}\n", .{motd});
+        if (fmt.isEnabled()) {
+            std.debug.print("\n{s}╭─ MOTD ─────────────{s}\n", .{ fmt.cyan, fmt.reset });
         } else {
-            std.debug.print("(empty)\n", .{});
+            std.debug.print("\n--- MOTD ---\n", .{});
         }
-        std.debug.print("------------\n\n", .{});
+        if (motd.len > 0) {
+            var it = std.mem.splitScalar(u8, motd, '\n');
+            while (it.next()) |l| {
+                if (fmt.isEnabled()) {
+                    std.debug.print("{s}│{s} {s}\n", .{ fmt.cyan, fmt.reset, l });
+                } else {
+                    std.debug.print("{s}\n", .{l});
+                }
+            }
+        } else {
+            line("(empty)\n", .{});
+        }
+        if (fmt.isEnabled()) {
+            std.debug.print("{s}╰────────────────────{s}\n\n", .{ fmt.cyan, fmt.reset });
+        } else {
+            std.debug.print("------------\n\n", .{});
+        }
     }
 
     // --- LIST (321/322/323) ---
 
     fn handleListStart(self: *Display) void {
         self.in_channel_list = true;
-        std.debug.print("\n--- Channels ---\n", .{});
+        if (fmt.isEnabled()) {
+            std.debug.print("\n{s}{s}channels{s}  {s}users  topic{s}\n", .{ fmt.bold, fmt.cyan, fmt.reset, fmt.dim, fmt.reset });
+            std.debug.print("{s}─────────────────────────────{s}\n", .{ fmt.dim, fmt.reset });
+        } else {
+            std.debug.print("\n--- Channels ---\n", .{});
+        }
     }
 
     /// Called when the user requests a channel list, so an empty reply
@@ -184,17 +243,22 @@ pub const Display = struct {
         if (channel.len == 0) return;
         self.list_count += 1;
         const topic = if (msg.trailing.len > 0) msg.trailing else "(no topic)";
-        std.debug.print("{s} [{s}] {s}\n", .{ channel, users, topic });
+        var chb: [256]u8 = undefined;
+        line("{s}  {s}  {s}\n", .{ fmt.paintChannel(channel, &chb), users, topic });
     }
 
     fn handleListEnd(self: *Display) void {
         if (self.in_channel_list) {
             self.in_channel_list = false;
-            std.debug.print("------------------\n\n", .{});
+            if (fmt.isEnabled()) {
+                std.debug.print("{s}─────────────────────────────{s}\n\n", .{ fmt.dim, fmt.reset });
+            } else {
+                std.debug.print("------------------\n\n", .{});
+            }
         } else if (self.list_refused) {
-            std.debug.print("Channel listing refused by the server (LIST is restricted here)\n\n", .{});
+            errLine("Channel listing refused by the server (LIST is restricted here)\n\n", .{});
         } else if (self.list_count == 0) {
-            std.debug.print("No channels found\n\n", .{});
+            line("No channels found\n\n", .{});
         }
         self.list_pending = false;
         self.list_refused = false;
@@ -234,12 +298,14 @@ pub const Display = struct {
     fn handleNames(_: *Display, msg: Message) void {
         // params: [nick, =, channel]
         if (msg.params[2].len == 0) return;
-        std.debug.print("Users in {s}: {s}\n", .{ msg.params[2], msg.trailing });
+        var chb: [256]u8 = undefined;
+        line("Users in {s}: {s}\n", .{ fmt.paintChannel(msg.params[2], &chb), msg.trailing });
     }
 
     fn handleEndOfNames(_: *Display, msg: Message) void {
         if (msg.params[1].len == 0) return;
-        std.debug.print("End of /names for {s}\n", .{msg.params[1]});
+        var chb: [256]u8 = undefined;
+        line("End of /names for {s}\n", .{fmt.paintChannel(msg.params[1], &chb)});
     }
 
     // --- Channel events ---
@@ -261,10 +327,14 @@ pub const Display = struct {
 
         if (self.current_nick) |my_nick| {
             if (std.mem.eql(u8, nick, my_nick)) {
-                std.debug.print("You joined {s}\n", .{channel});
+                var chb: [256]u8 = undefined;
+                event("You joined {s}\n", .{fmt.paintChannel(channel, &chb)});
                 self.setCurrentChannel(channel) catch {};
+                line("now talking in {s} — type a message, /help for commands\n", .{fmt.paintChannel(channel, &chb)});
             } else {
-                std.debug.print("{s} joined {s}\n", .{ nick, channel });
+                var nb: [256]u8 = undefined;
+                var chb: [256]u8 = undefined;
+                event("{s} joined {s}\n", .{ fmt.paintNick(nick, &nb), fmt.paintChannel(channel, &chb) });
             }
         }
     }
@@ -277,14 +347,19 @@ pub const Display = struct {
 
         if (self.current_nick) |my_nick| {
             if (std.mem.eql(u8, nick, my_nick)) {
-                std.debug.print("You left {s}\n", .{channel});
+                var chb: [256]u8 = undefined;
+                event("You left {s}\n", .{fmt.paintChannel(channel, &chb)});
                 if (self.current_channel) |current| {
                     if (std.mem.eql(u8, current, channel)) self.setCurrentChannel(null) catch {};
                 }
             } else if (msg.trailing.len > 0) {
-                std.debug.print("{s} left {s} ({s})\n", .{ nick, channel, msg.trailing });
+                var nb: [256]u8 = undefined;
+                var chb: [256]u8 = undefined;
+                event("{s} left {s} ({s})\n", .{ fmt.paintNick(nick, &nb), fmt.paintChannel(channel, &chb), msg.trailing });
             } else {
-                std.debug.print("{s} left {s}\n", .{ nick, channel });
+                var nb: [256]u8 = undefined;
+                var chb: [256]u8 = undefined;
+                event("{s} left {s}\n", .{ fmt.paintNick(nick, &nb), fmt.paintChannel(channel, &chb) });
             }
         }
     }
@@ -292,10 +367,11 @@ pub const Display = struct {
     fn handleQuit(_: *Display, msg: Message) void {
         const prefix = msg.prefix orelse return;
         const nick = nickOnly(prefix);
+        var nb: [256]u8 = undefined;
         if (msg.trailing.len > 0) {
-            std.debug.print("{s} quit ({s})\n", .{ nick, msg.trailing });
+            event("{s} quit ({s})\n", .{ fmt.paintNick(nick, &nb), msg.trailing });
         } else {
-            std.debug.print("{s} quit\n", .{nick});
+            event("{s} quit\n", .{fmt.paintNick(nick, &nb)});
         }
     }
 
@@ -307,10 +383,13 @@ pub const Display = struct {
 
         if (self.current_nick) |my_nick| {
             if (std.mem.eql(u8, old_nick, my_nick)) {
-                std.debug.print("You are now known as {s}\n", .{new_nick});
+                var nb: [256]u8 = undefined;
+                event("You are now known as {s}\n", .{fmt.paintNick(new_nick, &nb)});
                 self.setCurrentNick(new_nick) catch {};
             } else {
-                std.debug.print("{s} is now known as {s}\n", .{ old_nick, new_nick });
+                var ob: [256]u8 = undefined;
+                var nb: [256]u8 = undefined;
+                event("{s} is now known as {s}\n", .{ fmt.paintNick(old_nick, &ob), fmt.paintNick(new_nick, &nb) });
             }
         }
     }
@@ -322,21 +401,25 @@ pub const Display = struct {
         if (target.len == 0) return;
 
         if (parseAction(msg.trailing)) |action| {
+            var nb: [256]u8 = undefined;
             if (isChannelTarget(target)) {
-                std.debug.print("[{s}] * {s} {s}\n", .{ target, nick, action });
+                var chb: [256]u8 = undefined;
+                line("{s} * {s} {s}\n", .{ fmt.paintChannel(target, &chb), fmt.paintNick(nick, &nb), action });
             } else {
-                std.debug.print("* {s} {s}\n", .{ nick, action });
+                line("* {s} {s}\n", .{ fmt.paintNick(nick, &nb), action });
             }
             return;
         }
 
+        var nb: [256]u8 = undefined;
         if (isChannelTarget(target)) {
-            std.debug.print("[{s}] <{s}> {s}\n", .{ target, nick, msg.trailing });
+            var chb: [256]u8 = undefined;
+            line("{s} <{s}> {s}\n", .{ fmt.paintChannel(target, &chb), fmt.paintNick(nick, &nb), msg.trailing });
         } else if (self.current_nick) |my_nick| {
             if (std.mem.eql(u8, target, my_nick)) {
-                std.debug.print("PM from {s}: {s}\n", .{ nick, msg.trailing });
+                line("PM from {s}: {s}\n", .{ fmt.paintNick(nick, &nb), msg.trailing });
             } else {
-                std.debug.print("PM to {s}: {s}\n", .{ target, msg.trailing });
+                line("PM to {s}: {s}\n", .{ target, msg.trailing });
             }
         }
     }
@@ -350,13 +433,15 @@ pub const Display = struct {
         }
         if (msg.prefix) |prefix| {
             const nick = nickOnly(prefix);
+            var nb: [256]u8 = undefined;
             if (isChannelTarget(target)) {
-                std.debug.print("[{s}] -{s}- {s}\n", .{ target, nick, msg.trailing });
+                var chb: [256]u8 = undefined;
+                line("{s} -{s}- {s}\n", .{ fmt.paintChannel(target, &chb), fmt.paintNick(nick, &nb), msg.trailing });
             } else {
-                std.debug.print("-{s}- {s}\n", .{ nick, msg.trailing });
+                line("-{s}- {s}\n", .{ fmt.paintNick(nick, &nb), msg.trailing });
             }
         } else {
-            std.debug.print("-server- {s}\n", .{msg.trailing});
+            line("-server- {s}\n", .{msg.trailing});
         }
     }
 
@@ -365,23 +450,27 @@ pub const Display = struct {
         const prefix = msg.prefix orelse return;
         const channel = msg.params[0];
         if (channel.len == 0) return;
-        std.debug.print("Topic for {s} changed by {s}: {s}\n", .{ channel, nickOnly(prefix), msg.trailing });
+        var chb: [256]u8 = undefined;
+        var nb: [256]u8 = undefined;
+        event("Topic for {s} changed by {s}: {s}\n", .{ fmt.paintChannel(channel, &chb), fmt.paintNick(nickOnly(prefix), &nb), msg.trailing });
     }
 
     fn handleTopicReply(_: *Display, msg: Message) void {
         // params: [nick, channel]
         if (msg.params[1].len == 0) return;
+        var chb: [256]u8 = undefined;
         if (msg.trailing.len > 0) {
-            std.debug.print("Topic for {s}: {s}\n", .{ msg.params[1], msg.trailing });
+            line("Topic for {s}: {s}\n", .{ fmt.paintChannel(msg.params[1], &chb), msg.trailing });
         } else {
-            std.debug.print("No topic set for {s}\n", .{msg.params[1]});
+            line("No topic set for {s}\n", .{fmt.paintChannel(msg.params[1], &chb)});
         }
     }
 
     fn handleNoTopic(_: *Display, msg: Message) void {
         // params: [nick, channel]
         if (msg.params[1].len == 0) return;
-        std.debug.print("No topic set for {s}\n", .{msg.params[1]});
+        var chb: [256]u8 = undefined;
+        line("No topic set for {s}\n", .{fmt.paintChannel(msg.params[1], &chb)});
     }
 
     fn handleTopicWhoTime(_: *Display, msg: Message) void {
@@ -389,37 +478,37 @@ pub const Display = struct {
         if (msg.params[1].len == 0) return;
         const set_by = msg.params[2];
         const when = msg.params[3];
+        var chb: [256]u8 = undefined;
+        var nb: [256]u8 = undefined;
         if (set_by.len > 0 and when.len > 0) {
-            std.debug.print("Topic for {s} set by {s} at {s}\n", .{ msg.params[1], set_by, when });
+            line("Topic for {s} set by {s} at {s}\n", .{ fmt.paintChannel(msg.params[1], &chb), fmt.paintNick(set_by, &nb), when });
         } else if (set_by.len > 0) {
-            std.debug.print("Topic for {s} set by {s}\n", .{ msg.params[1], set_by });
+            line("Topic for {s} set by {s}\n", .{ fmt.paintChannel(msg.params[1], &chb), fmt.paintNick(set_by, &nb) });
         }
     }
 
     fn handleWhois(_: *Display, msg: Message) void {
         // params[1] is the queried nick for all these numerics.
         const nick = msg.params[1];
+        var nb: [256]u8 = undefined;
+        const styled_nick = fmt.paintNick(nick, &nb);
         if (std.mem.eql(u8, msg.command, "311")) {
             // [me, nick, user, host] + realname
-            std.debug.print("{s} is {s}@{s} ({s})\n", .{ nick, msg.params[2], msg.params[3], msg.trailing });
+            line("• {s} is {s}@{s} ({s})\n", .{ styled_nick, msg.params[2], msg.params[3], msg.trailing });
         } else if (std.mem.eql(u8, msg.command, "312")) {
             // [me, nick, server] + server info
-            std.debug.print("{s} on {s} ({s})\n", .{ nick, msg.params[2], msg.trailing });
+            line("• {s} on {s} ({s})\n", .{ styled_nick, msg.params[2], msg.trailing });
         } else if (std.mem.eql(u8, msg.command, "313")) {
-            std.debug.print("{s} {s}\n", .{ nick, msg.trailing });
+            line("• {s} {s}\n", .{ styled_nick, msg.trailing });
         } else if (std.mem.eql(u8, msg.command, "317")) {
             // [me, nick, idle-secs] + signon info in trailing
-            std.debug.print("{s} idle {s}s {s}\n", .{ nick, msg.params[2], msg.trailing });
+            line("• {s} idle {s}s {s}\n", .{ styled_nick, msg.params[2], msg.trailing });
         } else if (std.mem.eql(u8, msg.command, "319")) {
-            std.debug.print("{s} on {s}\n", .{ nick, msg.trailing });
+            line("• {s} on {s}\n", .{ styled_nick, msg.trailing });
         } else if (std.mem.eql(u8, msg.command, "301")) {
-            std.debug.print("{s} is away: {s}\n", .{ nick, msg.trailing });
+            line("• {s} is away: {s}\n", .{ styled_nick, msg.trailing });
         } else if (std.mem.eql(u8, msg.command, "318")) {
-            if (msg.trailing.len > 0) {
-                std.debug.print("End of /whois for {s}\n", .{nick});
-            } else {
-                std.debug.print("End of /whois for {s}\n", .{nick});
-            }
+            line("End of /whois for {s}\n", .{styled_nick});
         }
     }
 

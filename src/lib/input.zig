@@ -164,20 +164,25 @@ pub fn executeCommand(client: *IrcClient, cmd: Command) !void {
 }
 
 fn printHelp() void {
-    std.debug.print("\nAvailable commands:\n", .{});
-    std.debug.print("  /join <channel>     - Join a channel (alias: /j)\n", .{});
+    const f = @import("format.zig");
+    if (f.isEnabled()) {
+        std.debug.print("\n{s}{s}commands{s}\n", .{ f.bold, f.cyan, f.reset });
+    } else {
+        std.debug.print("\nAvailable commands:\n", .{});
+    }
+    std.debug.print("  /join <channel>          - Join a channel (alias: /j)\n", .{});
     std.debug.print("  /part <channel> [reason] - Leave a channel (alias: /p)\n", .{});
-    std.debug.print("  /msg <target> <text> - Send a message (alias: /m)\n", .{});
-    std.debug.print("  /me <action>        - Send an action to current channel\n", .{});
-    std.debug.print("  /nick <nick>        - Change nickname (alias: /n)\n", .{});
-    std.debug.print("  /topic [channel] [text] - Show or set topic (alias: /t)\n", .{});
-    std.debug.print("  /names [channel]    - List users in a channel\n", .{});
-    std.debug.print("  /whois <nick>       - Show info about a user (alias: /w)\n", .{});
-    std.debug.print("  /list               - List channels (alias: /l)\n", .{});
-    std.debug.print("  /raw <cmd> [params] - Send raw IRC command (alias: /r)\n", .{});
-    std.debug.print("  /quit [reason]      - Disconnect from server (alias: /q)\n", .{});
-    std.debug.print("  /help               - Show this help (alias: /h)\n", .{});
-    std.debug.print("  <text>              - Send message to current channel\n", .{});
+    std.debug.print("  /msg <target> <text>     - Send a message (alias: /m)\n", .{});
+    std.debug.print("  /me <action>             - Send an action to current channel\n", .{});
+    std.debug.print("  /nick <nick>             - Change nickname (alias: /n)\n", .{});
+    std.debug.print("  /topic [chan] [text]     - Show or set topic (alias: /t)\n", .{});
+    std.debug.print("  /names [channel]         - List users in a channel\n", .{});
+    std.debug.print("  /whois <nick>            - Show info about a user (alias: /w)\n", .{});
+    std.debug.print("  /list                    - List channels (alias: /l)\n", .{});
+    std.debug.print("  /raw <cmd> [params]      - Send raw IRC command (alias: /r)\n", .{});
+    std.debug.print("  /quit [reason]           - Disconnect from server (alias: /q)\n", .{});
+    std.debug.print("  /help                    - Show this help (alias: /h)\n", .{});
+    std.debug.print("  <text>                   - Send message to current channel\n", .{});
     std.debug.print("\n", .{});
 }
 

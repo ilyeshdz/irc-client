@@ -1,6 +1,7 @@
 const std = @import("std");
 const Message = @import("message.zig").Message;
 const Display = @import("display.zig").Display;
+const Format = @import("format.zig");
 const net = std.Io.net;
 
 const MAX_MESSAGE_LENGTH = 512;
@@ -22,6 +23,7 @@ pub const IrcClient = struct {
         const hostname = try net.HostName.init(host);
         const stream = try hostname.connect(io, port, .{ .mode = .stream });
         const allocator = std.heap.page_allocator;
+        Format.setIo(io);
         const display = try Display.init(allocator);
         const client = IrcClient{
             .io = io,
