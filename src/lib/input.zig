@@ -17,59 +17,59 @@ pub const Command = union(enum) {
 
         if (!std.mem.startsWith(u8, trimmed, "/")) {
             if (current_channel) |chan| {
+                if (chan.len == 0) return error.NoCurrentChannel;
                 return Command{ .Msg = .{ .target = chan, .text = trimmed } };
             }
             return error.NoCurrentChannel;
         }
 
-        var iter = std.mem.splitScalar(u8, trimmed[1..], ' ');
-        const cmd = iter.next() orelse return error.EmptyInput;
+        // Split "/cmd args..." into cmd and raw args (slices of `trimmed`,
+        // no allocation so returned slices stay valid as long as input lives).
+        const without_slash = trimmed[1..];
+        const cmd_end = std.mem.indexOfScalar(u8, without_slash, ' ') orelse without_slash.len;
+        const cmd = without_slash[0..cmd_end];
+        var args = std.mem.trimStart(u8, without_slash[cmd_end..], " ");
 
         if (std.mem.eql(u8, cmd, "join") or std.mem.eql(u8, cmd, "j")) {
-            const channel = iter.next() orelse return error.MissingArgument;
+            const channel = nextToken(&args) orelse return error.MissingArgument;
             return Command{ .Join = channel };
         } else if (std.mem.eql(u8, cmd, "list") or std.mem.eql(u8, cmd, "l")) {
             return Command{ .List = {} };
         } else if (std.mem.eql(u8, cmd, "part") or std.mem.eql(u8, cmd, "p")) {
-            const channel = iter.next() orelse return error.MissingArgument;
-            var reason: ?[]const u8 = null;
-            if (iter.next()) |r| {
-                reason = r;
-                while (iter.next()) |_| {}
-            }
+            const channel = nextToken(&args) orelse return error.MissingArgument;
+            const reason = restOrNull(&args);
             return Command{ .Part = .{ .channel = channel, .reason = reason } };
         } else if (std.mem.eql(u8, cmd, "msg") or std.mem.eql(u8, cmd, "m") or std.mem.eql(u8, cmd, "privmsg")) {
-            const target = iter.next() orelse return error.MissingArgument;
-            const text = iter.next() orelse return error.MissingArgument;
-            var rest = text;
-            while (iter.next()) |r| {
-                rest = try std.fmt.allocPrint(std.heap.page_allocator, "{s} {s}", .{ rest, r });
-                defer std.heap.page_allocator.free(rest);
-            }
-            return Command{ .Msg = .{ .target = target, .text = rest } };
+            const target = nextToken(&args) orelse return error.MissingArgument;
+            const text = restOrNull(&args) orelse return error.MissingArgument;
+            return Command{ .Msg = .{ .target = target, .text = text } };
         } else if (std.mem.eql(u8, cmd, "raw") or std.mem.eql(u8, cmd, "r")) {
-            const command = iter.next() orelse return error.MissingArgument;
-            var params: []const u8 = "";
-            if (iter.next()) |p| {
-                params = p;
-                while (iter.next()) |r| {
-                    params = try std.fmt.allocPrint(std.heap.page_allocator, "{s} {s}", .{ params, r });
-                    defer std.heap.page_allocator.free(params);
-                }
-            }
+            const command = nextToken(&args) orelse return error.MissingArgument;
+            const params = restOrNull(&args) orelse "";
             return Command{ .Raw = .{ .command = command, .params = params } };
         } else if (std.mem.eql(u8, cmd, "quit") or std.mem.eql(u8, cmd, "q")) {
-            var reason: ?[]const u8 = null;
-            if (iter.next()) |r| {
-                reason = r;
-                while (iter.next()) |_| {}
-            }
+            const reason = restOrNull(&args);
             return Command{ .Quit = reason };
         } else if (std.mem.eql(u8, cmd, "help") or std.mem.eql(u8, cmd, "h")) {
             return Command{ .Help = {} };
         } else {
             return Command{ .Unknown = cmd };
         }
+    }
+
+    fn nextToken(args: *[]const u8) ?[]const u8 {
+        args.* = std.mem.trimStart(u8, args.*, " ");
+        if (args.*.len == 0) return null;
+        const end = std.mem.indexOfScalar(u8, args.*, ' ') orelse args.*.len;
+        const token = args.*[0..end];
+        args.* = if (end < args.*.len) args.*[end..] else args.*[end..end];
+        return token;
+    }
+
+    fn restOrNull(args: *[]const u8) ?[]const u8 {
+        args.* = std.mem.trim(u8, args.*, " \r\n\t");
+        if (args.*.len == 0) return null;
+        return args.*;
     }
 };
 
