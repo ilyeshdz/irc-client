@@ -155,6 +155,17 @@ pub const Display = struct {
             }
         } else if (isCmd(msg, "461")) {
             if (msg.params[1].len > 0) errLine("{s}: not enough parameters\n", .{msg.params[1]});
+        } else if (isCmd(msg, "401") or isCmd(msg, "403") or isCmd(msg, "404") or
+            isCmd(msg, "441") or isCmd(msg, "442") or isCmd(msg, "443") or
+            isCmd(msg, "473") or isCmd(msg, "474") or isCmd(msg, "475"))
+        {
+            self.handleSendError(msg);
+        } else if (isCmd(msg, "421")) {
+            if (msg.params[1].len > 0) {
+                errLine("{s}: {s}\n", .{ msg.params[1], msg.trailing });
+            } else if (msg.trailing.len > 0) {
+                errLine("{s}\n", .{msg.trailing});
+            }
         }
         // Other numerics/commands are ignored on purpose.
     }
@@ -521,7 +532,63 @@ pub const Display = struct {
         if (!std.mem.startsWith(u8, inner, prefix)) return null;
         return inner[prefix.len..];
     }
+
+    /// Show server rejections for messages we tried to send, e.g.
+    /// 404 "Cannot send to channel" when not joined. params[1] is the
+    /// target, trailing carries the human-readable reason.
+    fn handleSendError(_: *Display, msg: Message) void {
+        const target = msg.params[1];
+        if (target.len > 0 and msg.trailing.len > 0) {
+            errLine("{s}: {s}\n", .{ target, msg.trailing });
+        } else if (msg.trailing.len > 0) {
+            errLine("{s}\n", .{msg.trailing});
+        } else if (target.len > 0) {
+            errLine("{s}: command failed ({s})\n", .{ target, msg.command });
+        }
+    }
+
+    /// Local echo of a message we just sent (the server never echoes our
+    /// own PRIVMSG back). Mirrors the incoming-message styling.
+    pub fn echoSent(self: *Display, target: []const u8, text: []const u8, is_action: bool) void {
+        const me = self.current_nick orelse "me";
+        var nb: [256]u8 = undefined;
+        if (isChannelTarget(target)) {
+            var chb: [256]u8 = undefined;
+            if (is_action) {
+                line("{s} * {s} {s}\n", .{ fmt.paintChannel(target, &chb), fmt.paintNick(me, &nb), text });
+            } else {
+                line("{s} <{s}> {s}\n", .{ fmt.paintChannel(target, &chb), fmt.paintNick(me, &nb), text });
+            }
+        } else if (is_action) {
+            line("* {s} {s}\n", .{ fmt.paintNick(me, &nb), text });
+        } else {
+            line("PM to {s}: {s}\n", .{ target, text });
+        }
+    }
 };
+
+test "send errors and local echo are displayed without crashing" {
+    var d = try Display.init(std.testing.allocator);
+    defer d.deinit();
+    try d.setCurrentNick("tester");
+    // 404 when messaging a channel we never joined.
+    try d.handleServerMessage(.{
+        .prefix = "test.local",
+        .command = "404",
+        .params = .{ "tester", "#ghost" } ++ .{""} ** 13,
+        .trailing = "Cannot send to channel (+n)",
+    });
+    // Unknown command reply.
+    try d.handleServerMessage(.{
+        .prefix = "test.local",
+        .command = "421",
+        .params = .{ "tester", "FROB" } ++ .{""} ** 13,
+        .trailing = "Unknown command",
+    });
+    d.echoSent("#zig", "hello", false);
+    d.echoSent("alice", "hi", false);
+    d.echoSent("#zig", "waves", true);
+}
 
 test "refused LIST reports refusal instead of empty list" {
     var d = try Display.init(std.testing.allocator);

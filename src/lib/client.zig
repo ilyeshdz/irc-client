@@ -113,11 +113,13 @@ pub const IrcClient = struct {
         var buf: [512]u8 = undefined;
         const action = try std.fmt.bufPrint(&buf, "\x01ACTION {s}\x01", .{text});
         try self.send(Message{ .command = "PRIVMSG", .params = .{target} ++ .{""} ** 14, .trailing = action });
+        self.display.echoSent(target, text, true);
     }
 
     /// Send a message to a target (channel or user).
     pub fn sendMessage(self: *IrcClient, target: []const u8, text: []const u8) !void {
         try self.send(Message{ .command = "PRIVMSG", .params = .{target} ++ .{""} ** 14, .trailing = text });
+        self.display.echoSent(target, text, false);
     }
 
     /// Leave a channel with an optional reason.
