@@ -31,14 +31,28 @@ pub const Display = struct {
 
     pub fn deinit(self: *Display) void {
         self.motd_buffer.deinit(self.allocator);
+        if (self.current_channel) |c| self.allocator.free(c);
+        if (self.current_nick) |n| self.allocator.free(n);
     }
 
-    pub fn setCurrentChannel(self: *Display, channel: ?[]const u8) void {
-        self.current_channel = channel;
+    pub fn setCurrentChannel(self: *Display, channel: ?[]const u8) !void {
+        if (self.current_channel) |c| {
+            self.allocator.free(c);
+            self.current_channel = null;
+        }
+        if (channel) |ch| {
+            if (ch.len == 0) return;
+            self.current_channel = try self.allocator.dupe(u8, ch);
+        }
     }
 
-    pub fn setCurrentNick(self: *Display, nick: []const u8) void {
-        self.current_nick = nick;
+    pub fn setCurrentNick(self: *Display, nick: []const u8) !void {
+        if (self.current_nick) |n| {
+            self.allocator.free(n);
+            self.current_nick = null;
+        }
+        if (nick.len == 0) return;
+        self.current_nick = try self.allocator.dupe(u8, nick);
     }
 
     pub fn isMOTDComplete(self: *Display) bool {
@@ -240,7 +254,7 @@ pub const Display = struct {
         if (self.current_nick) |my_nick| {
             if (std.mem.eql(u8, nick, my_nick)) {
                 std.debug.print("You joined {s}\n", .{channel});
-                self.current_channel = channel;
+                self.setCurrentChannel(channel) catch {};
             } else {
                 std.debug.print("{s} joined {s}\n", .{ nick, channel });
             }
@@ -257,7 +271,7 @@ pub const Display = struct {
             if (std.mem.eql(u8, nick, my_nick)) {
                 std.debug.print("You left {s}\n", .{channel});
                 if (self.current_channel) |current| {
-                    if (std.mem.eql(u8, current, channel)) self.current_channel = null;
+                    if (std.mem.eql(u8, current, channel)) self.setCurrentChannel(null) catch {};
                 }
             } else if (msg.trailing.len > 0) {
                 std.debug.print("{s} left {s} ({s})\n", .{ nick, channel, msg.trailing });
@@ -286,7 +300,7 @@ pub const Display = struct {
         if (self.current_nick) |my_nick| {
             if (std.mem.eql(u8, old_nick, my_nick)) {
                 std.debug.print("You are now known as {s}\n", .{new_nick});
-                self.current_nick = new_nick;
+                self.setCurrentNick(new_nick) catch {};
             } else {
                 std.debug.print("{s} is now known as {s}\n", .{ old_nick, new_nick });
             }
@@ -351,7 +365,7 @@ pub const Display = struct {
 test "refused LIST reports refusal instead of empty list" {
     var d = try Display.init(std.testing.allocator);
     defer d.deinit();
-    d.setCurrentNick("tester");
+    try d.setCurrentNick("tester");
     d.beginList();
     // IRCnet-style deprecation notice received while the list is pending.
     try d.handleServerMessage(.{
@@ -374,7 +388,7 @@ test "refused LIST reports refusal instead of empty list" {
 test "empty LIST without refusal stays a plain empty list" {
     var d = try Display.init(std.testing.allocator);
     defer d.deinit();
-    d.setCurrentNick("tester");
+    try d.setCurrentNick("tester");
     d.beginList();
     try d.handleServerMessage(.{
         .prefix = "test.local",

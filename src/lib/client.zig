@@ -12,6 +12,7 @@ pub const IrcClient = struct {
     read_buffer: [MAX_MESSAGE_LENGTH]u8 = undefined,
     reader: ?net.Stream.Reader = null,
 
+    allocator: std.mem.Allocator,
     display: Display,
     current_nick: []const u8,
 
@@ -20,10 +21,12 @@ pub const IrcClient = struct {
     pub fn init(io: std.Io, host: []const u8, port: u16) !IrcClient {
         const hostname = try net.HostName.init(host);
         const stream = try hostname.connect(io, port, .{ .mode = .stream });
-        const display = try Display.init(std.heap.page_allocator);
+        const allocator = std.heap.page_allocator;
+        const display = try Display.init(allocator);
         const client = IrcClient{
             .io = io,
             .stream = stream,
+            .allocator = allocator,
             .display = display,
             .current_nick = "",
             .current_channel = null,
@@ -33,13 +36,19 @@ pub const IrcClient = struct {
 
     pub fn deinit(self: *IrcClient) void {
         self.stream.close(self.io);
+        if (self.current_nick.len > 0) self.allocator.free(self.current_nick);
+        if (self.current_channel) |c| {
+            if (c.len > 0) self.allocator.free(c);
+        }
         self.display.deinit();
     }
 
     /// Handshake with the IRC server, sending the NICK and USER commands.
     pub fn handshake(self: *IrcClient, username: []const u8, realname: []const u8) !void {
-        self.current_nick = username;
-        self.display.setCurrentNick(username);
+        const owned_nick = try self.allocator.dupe(u8, username);
+        if (self.current_nick.len > 0) self.allocator.free(self.current_nick);
+        self.current_nick = owned_nick;
+        try self.display.setCurrentNick(username);
         try self.send(Message{ .command = "NICK", .params = .{username} ++ .{""} ** 14 });
         try self.send(Message{ .command = "USER", .params = .{ username, "0", "*", realname } ++ .{""} ** 11 });
     }
@@ -92,9 +101,16 @@ pub const IrcClient = struct {
     }
 
     /// Set the current channel for default message targeting.
-    pub fn setCurrentChannel(self: *IrcClient, channel: []const u8) void {
-        self.current_channel = channel;
-        self.display.setCurrentChannel(channel);
+    /// Takes ownership of a copy; passing null or an empty slice clears it.
+    pub fn setCurrentChannel(self: *IrcClient, channel: ?[]const u8) !void {
+        if (self.current_channel) |c| {
+            if (c.len > 0) self.allocator.free(c);
+            self.current_channel = null;
+        }
+        if (channel) |ch| {
+            if (ch.len > 0) self.current_channel = try self.allocator.dupe(u8, ch);
+        }
+        try self.display.setCurrentChannel(channel);
     }
 
     /// Get the current channel.
@@ -136,6 +152,20 @@ pub const IrcClient = struct {
         }
 
         try self.display.handleServerMessage(msg);
+
+        // Keep the client's owned nick in sync when we change nick
+        // (Display only tracks its own copy).
+        if (std.mem.eql(u8, msg.command, "NICK")) {
+            if (msg.prefix) |prefix| {
+                const excl = std.mem.indexOfScalar(u8, prefix, '!') orelse prefix.len;
+                const old_nick = prefix[0..excl];
+                if (std.mem.eql(u8, old_nick, self.current_nick) and msg.params[0].len > 0) {
+                    const owned = try self.allocator.dupe(u8, msg.params[0]);
+                    self.allocator.free(self.current_nick);
+                    self.current_nick = owned;
+                }
+            }
+        }
 
         return msg;
     }

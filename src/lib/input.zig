@@ -77,13 +77,13 @@ pub fn executeCommand(client: *IrcClient, cmd: Command) !void {
     switch (cmd) {
         .Join => |channel| {
             try client.joinChannel(channel);
-            client.setCurrentChannel(channel);
+            try client.setCurrentChannel(channel);
         },
         .Part => |p| {
             try client.partChannel(p.channel, p.reason);
             if (client.getCurrentChannel()) |current| {
                 if (std.mem.eql(u8, current, p.channel)) {
-                    client.setCurrentChannel("");
+                    try client.setCurrentChannel(null);
                 }
             }
         },
