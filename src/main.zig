@@ -19,7 +19,7 @@ const helpMessage =
     \\
 ;
 
-// change the name latter
+// TODO: Replace it later / move it somewhere else
 pub fn findStringWithinSliceOfString(slice: []const []const u8, target: []const u8) bool {
     for (slice) |item| {
         if (std.mem.eql(u8, item, target)) {
@@ -50,12 +50,8 @@ pub fn main(init: std.process.Init) !void {
     var have_choice = false;
     defer if (have_choice) choice.deinit();
 
-    if (args.len > 1 and std.mem.eql(u8, args[1], "--profile")) {
-        if (args.len < 3) {
-            std.debug.print("usage: irc_client --profile NAME\n", .{});
-            return;
-        }
-        const p = cfg.findProfile(args[2]) orelse {
+    if (Lib.getValueForOption(args, "profile", true)) |val| {
+        const p = cfg.findProfile(val) orelse {
             std.debug.print("unknown profile '{s}'.\n", .{args[2]});
             return;
         };
@@ -68,9 +64,12 @@ pub fn main(init: std.process.Init) !void {
             .profile_name = try gpa.dupe(u8, p.name),
         };
         have_choice = true;
-    } else if (args.len > 1) {
-        // Quick path: `irc_client local` or `irc_client some.host`.
-        const host = if (std.mem.eql(u8, args[1], "local")) "127.0.0.1" else args[1];
+    }
+
+    // Quick path for lcoal / host
+    if (args.len == 2) {
+        const arg_host = args[1];
+        const host = if (std.mem.eql(u8, arg_host, "local")) "127.0.0.1" else arg_host;
         const nick = Picker.defaultNick(&cfg);
         choice = .{
             .allocator = gpa,

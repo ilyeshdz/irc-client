@@ -7,3 +7,4 @@ pub const Config = @import("config.zig");
 pub const Picker = @import("picker.zig");
 pub const runEventLoop = @import("input.zig").runEventLoop;
 pub const Command = @import("input.zig").Command;
+pub const getValueForOption = @import("utils.zig").getValueForOption;
