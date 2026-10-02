@@ -1,5 +1,7 @@
 const std = @import("std");
-const IrcClient = @import("client.zig").IrcClient;
+const Lib = @import("irc-client");
+const IrcClient = Lib.IrcClient;
+const Display = @import("display.zig").Display;
 const InputBox = @import("inputbox.zig").InputBox;
 
 pub const Command = union(enum) {
@@ -143,22 +145,25 @@ pub const Command = union(enum) {
     }
 };
 
-pub fn executeCommand(client: *IrcClient, cmd: Command) !void {
+pub fn executeCommand(client: *IrcClient, display: *Display, cmd: Command) !void {
     switch (cmd) {
         .Join => |channel| {
             try client.joinChannel(channel);
             try client.setCurrentChannel(channel);
+            try display.setCurrentChannel(channel);
         },
         .Part => |p| {
             try client.partChannel(p.channel, p.reason);
             if (client.getCurrentChannel()) |current| {
                 if (std.mem.eql(u8, current, p.channel)) {
                     try client.setCurrentChannel(null);
+                    try display.setCurrentChannel(null);
                 }
             }
         },
         .Msg => |m| {
             try client.sendMessage(m.target, m.text);
+            display.echoSent(m.target, m.text, false);
         },
         .Raw => |r| {
             try client.sendRaw(r.command, r.params);
@@ -170,6 +175,7 @@ pub fn executeCommand(client: *IrcClient, cmd: Command) !void {
             printHelp();
         },
         .List => {
+            display.beginList();
             try client.listChannels();
             std.debug.print("Requesting channel list...\n", .{});
         },
@@ -218,6 +224,7 @@ pub fn executeCommand(client: *IrcClient, cmd: Command) !void {
                 return;
             }
             try client.sendAction(target, m.text);
+            display.echoSent(target, m.text, true);
         },
         .Unknown => |unknown_cmd| {
             std.debug.print("Unknown command: /{s}. Type /help for help.\n", .{unknown_cmd});
@@ -266,7 +273,7 @@ fn takeLine(input_buffer: *[1024]u8, input_len: *usize, out: *[1024]u8) ?[]const
     return out[0..clean.len];
 }
 
-pub fn runEventLoop(client: *IrcClient) !void {
+pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
     const stdin_fd = std.posix.STDIN_FILENO;
     const socket_fd = client.stream.socket.handle;
 
@@ -296,7 +303,7 @@ pub fn runEventLoop(client: *IrcClient) !void {
                         .none => {},
                         .line => |submitted| {
                             ibox.hide();
-                            if (try handleSubmittedLine(client, submitted)) return;
+                            if (try handleSubmittedLine(client, display, submitted)) return;
                             ibox.show(client.getCurrentChannel(), client.current_nick);
                         },
                         .interrupt => {
@@ -321,7 +328,7 @@ pub fn runEventLoop(client: *IrcClient) !void {
                 // re-trigger on the same line (infinite error spam).
                 var line_buf: [1024]u8 = undefined;
                 while (takeLine(&input_buffer, &input_len, &line_buf)) |clean_line| {
-                    if (try handleSubmittedLine(client, clean_line)) return;
+                    if (try handleSubmittedLine(client, display, clean_line)) return;
                 }
             }
         }
@@ -331,7 +338,9 @@ pub fn runEventLoop(client: *IrcClient) !void {
         if (try client.hasCompleteLine(socket_fd)) {
             ibox.hide();
             while (try client.hasCompleteLine(socket_fd)) {
-                _ = try client.readMessageInto(&read_buffer);
+                if (try client.readMessageInto(&read_buffer)) |msg| {
+                    try display.handleServerMessage(msg);
+                }
             }
             ibox.show(client.getCurrentChannel(), client.current_nick);
         }
@@ -347,7 +356,7 @@ pub fn runEventLoop(client: *IrcClient) !void {
 
 /// Parse and run one submitted input line.
 /// Returns true when the client should disconnect (Quit command).
-fn handleSubmittedLine(client: *IrcClient, clean_line: []const u8) !bool {
+fn handleSubmittedLine(client: *IrcClient, display: *Display, clean_line: []const u8) !bool {
     const cmd = Command.parse(clean_line, client.getCurrentChannel()) catch |err| {
         if (err == error.NoCurrentChannel) {
             std.debug.print("No current channel. Use /join first.\n", .{});
@@ -360,7 +369,7 @@ fn handleSubmittedLine(client: *IrcClient, clean_line: []const u8) !bool {
     };
 
     if (cmd) |c| {
-        try executeCommand(client, c);
+        try executeCommand(client, display, c);
         return c == .Quit;
     }
     return false;

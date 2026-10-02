@@ -1,9 +1,12 @@
 const std = @import("std");
 const Lib = @import("irc-client");
 const IrcClient = Lib.IrcClient;
-const runEventLoop = Lib.runEventLoop;
-const Cfg = Lib.Config;
-const Picker = Lib.Picker;
+const Cfg = @import("config.zig");
+const Picker = @import("picker.zig");
+const utils = @import("utils.zig");
+const format = @import("format.zig");
+const Display = @import("display.zig").Display;
+const runEventLoop = @import("input.zig").runEventLoop;
 
 const helpMessage =
     \\Usage: irc_client [OPTIONS] [HOST]
@@ -50,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
     var have_choice = false;
     defer if (have_choice) choice.deinit();
 
-    if (Lib.getValueForOption(args, "profile", true)) |val| {
+    if (utils.getValueForOption(args, "profile", true)) |val| {
         const p = cfg.findProfile(val) orelse {
             std.debug.print("unknown profile '{s}'.\n", .{args[2]});
             return;
@@ -90,15 +93,31 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("connecting to {s}:{d} as {s}…\n", .{ choice.host, choice.port, choice.nick });
 
     // Plain TCP only (no TLS), so 6667-style ports.
+    format.setIo(io);
     var client = try IrcClient.init(io, choice.host, choice.port);
     defer client.deinit();
 
     try client.handshake(choice.nick, choice.realname);
+
+    // The interface layer owns its own display state; seed it with our nick.
+    var display = try Display.init(gpa);
+    defer display.deinit();
+    try display.setCurrentNick(choice.nick);
 
     cfg.recordUse(choice.host, choice.port, choice.nick, choice.profile_name) catch {};
     if (cfg_path) |p| Cfg.save(&cfg, gpa, io, p) catch {
         std.debug.print("warning: could not save config to {s}\n", .{p});
     };
 
-    try runEventLoop(&client);
+    try runEventLoop(&client, &display);
+}
+
+test {
+    _ = @import("config.zig");
+    _ = @import("display.zig");
+    _ = @import("format.zig");
+    _ = @import("input.zig");
+    _ = @import("inputbox.zig");
+    _ = @import("picker.zig");
+    _ = @import("utils.zig");
 }

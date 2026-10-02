@@ -1,7 +1,5 @@
 const std = @import("std");
 const Message = @import("message.zig").Message;
-const Display = @import("display.zig").Display;
-const Format = @import("format.zig");
 const net = std.Io.net;
 
 const MAX_MESSAGE_LENGTH = 512;
@@ -14,7 +12,6 @@ pub const IrcClient = struct {
     reader: ?net.Stream.Reader = null,
 
     allocator: std.mem.Allocator,
-    display: Display,
     current_nick: []const u8,
 
     current_channel: ?[]const u8 = null,
@@ -23,13 +20,10 @@ pub const IrcClient = struct {
         const hostname = try net.HostName.init(host);
         const stream = try hostname.connect(io, port, .{ .mode = .stream });
         const allocator = std.heap.page_allocator;
-        Format.setIo(io);
-        const display = try Display.init(allocator);
         const client = IrcClient{
             .io = io,
             .stream = stream,
             .allocator = allocator,
-            .display = display,
             .current_nick = "",
             .current_channel = null,
         };
@@ -42,7 +36,6 @@ pub const IrcClient = struct {
         if (self.current_channel) |c| {
             if (c.len > 0) self.allocator.free(c);
         }
-        self.display.deinit();
     }
 
     /// Handshake with the IRC server, sending the NICK and USER commands.
@@ -50,7 +43,6 @@ pub const IrcClient = struct {
         const owned_nick = try self.allocator.dupe(u8, username);
         if (self.current_nick.len > 0) self.allocator.free(self.current_nick);
         self.current_nick = owned_nick;
-        try self.display.setCurrentNick(username);
         try self.send(Message{ .command = "NICK", .params = .{username} ++ .{""} ** 14 });
         try self.send(Message{ .command = "USER", .params = .{ username, "0", "*", realname } ++ .{""} ** 11 });
     }
@@ -75,7 +67,6 @@ pub const IrcClient = struct {
 
     /// Request the server's channel list.
     pub fn listChannels(self: *IrcClient) !void {
-        self.display.beginList();
         try self.sendRaw("list", "");
     }
 
@@ -161,13 +152,11 @@ pub const IrcClient = struct {
         var buf: [512]u8 = undefined;
         const action = try std.fmt.bufPrint(&buf, "\x01ACTION {s}\x01", .{text});
         try self.send(Message{ .command = "PRIVMSG", .params = .{target} ++ .{""} ** 14, .trailing = action });
-        self.display.echoSent(target, text, true);
     }
 
     /// Send a message to a target (channel or user).
     pub fn sendMessage(self: *IrcClient, target: []const u8, text: []const u8) !void {
         try self.send(Message{ .command = "PRIVMSG", .params = .{target} ++ .{""} ** 14, .trailing = text });
-        self.display.echoSent(target, text, false);
     }
 
     /// Leave a channel with an optional reason.
@@ -198,7 +187,6 @@ pub const IrcClient = struct {
         if (channel) |ch| {
             if (ch.len > 0) self.current_channel = try self.allocator.dupe(u8, ch);
         }
-        try self.display.setCurrentChannel(channel);
     }
 
     /// Get the current channel (null when not in a channel;
@@ -244,10 +232,8 @@ pub const IrcClient = struct {
             return null;
         }
 
-        try self.display.handleServerMessage(msg);
-
         // Keep the client's owned nick in sync when we change nick
-        // (Display only tracks its own copy).
+        // (the display layer tracks its own copy from the same message).
         if (std.mem.eql(u8, msg.command, "NICK")) {
             if (msg.prefix) |prefix| {
                 const excl = std.mem.indexOfScalar(u8, prefix, '!') orelse prefix.len;
@@ -261,10 +247,6 @@ pub const IrcClient = struct {
         }
 
         return msg;
-    }
-
-    pub fn isMOTDComplete(self: *IrcClient) bool {
-        return self.display.isMOTDComplete();
     }
 };
 

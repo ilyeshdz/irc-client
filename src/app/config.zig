@@ -121,8 +121,6 @@ pub const Config = struct {
     }
 };
 
-// --- Persistence (JSON in ~/.config/irc-client/config) ---
-
 pub fn configPath(allocator: std.mem.Allocator) ![]u8 {
     const home = std.c.getenv("HOME") orelse return error.MissingHome;
     return std.fmt.allocPrint(allocator, "{s}/.config/irc-client/config", .{std.mem.span(home)});

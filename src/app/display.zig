@@ -1,5 +1,5 @@
 const std = @import("std");
-const Message = @import("message.zig").Message;
+const Message = @import("irc-client").Message;
 const fmt = @import("format.zig");
 
 /// Print a normal line prefixed with a dim timestamp.
@@ -789,14 +789,14 @@ test "being kicked clears the current channel" {
 test "colon-less single-word reasons fall back to params" {
     // Servers may send `KICK #c nick bye` without ':'; the parser then
     // leaves "bye" in params[2] instead of trailing.
-    const parsed = try Message.parse("op!u@h KICK #zig bob bye");
+    const parsed = try Message.parse(":op!u@h KICK #zig bob bye");
     try std.testing.expectEqualStrings("", parsed.trailing);
     try std.testing.expectEqualStrings("bye", Display.reasonOf(parsed, 2));
 
-    const quit = try Message.parse("bob!u@h QUIT leaving");
+    const quit = try Message.parse(":bob!u@h QUIT leaving");
     try std.testing.expectEqualStrings("leaving", Display.reasonOf(quit, 0));
 
-    const part = try Message.parse("bob!u@h PART #zig ciao");
+    const part = try Message.parse(":bob!u@h PART #zig ciao");
     try std.testing.expectEqualStrings("ciao", Display.reasonOf(part, 1));
 }
 
