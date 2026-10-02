@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// Built-in servers suggested when no profile matches.
+/// Built-in servers suggested when no profile matches. Maybe change that later
 pub const common_servers = [_]Server{
     .{ .host = "irc.ircnet.com", .port = 6667 },
     .{ .host = "irc.libera.chat", .port = 6667 },
