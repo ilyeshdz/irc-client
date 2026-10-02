@@ -1,45 +1,52 @@
 # irc-client
 
-A small IRC client in Zig. It's a side project for learning Zig and for
-remembering what chatting on the internet used to feel like.
+An IRC client written in Zig. Two parts: a small IRC library in `src/lib`
+and a terminal client in `src/app` built on top of it.
 
-No frameworks, no dependencies. Just sockets and the IRC protocol.
+I've been working on this on and off for a while to learn Zig. It works,
+it's not finished, and that's fine by me.
 
 ## Running it
 
-Needs [Zig](https://ziglang.org/):
+Needs [Zig](https://ziglang.org/) 0.16.
 
 ```sh
-zig build run                  # picker with profiles and some common servers
+zig build run                    # picker
 zig build run -- --profile home
-zig build run -- local         # local test server
+zig build run -- local           # 127.0.0.1:6667
 ```
 
-First launch shows a small picker: your saved profiles, then recently used
-servers, then a few well-known ones. Pick a number, or `n` to save a new
-connection as a profile. Profiles live in `~/.config/irc-client/config` as
-plain JSON.
+No arguments and you get a picker: your profiles, recent servers, a few
+known ones. `n` saves a new connection. Profiles are plain JSON in
+`~/.config/irc-client/config`.
 
-In the client, `/help` lists what's implemented: joining channels, private
-messages, topics, whois, kicks, modes, away. Your own messages echo back, and
-server errors show up instead of disappearing.
+`/help` lists the commands: join, part, msg, me, nick, topic, names, whois,
+who, mode, kick, invite, away, list, raw, quit. Plain TCP only, no TLS.
 
 ## Local server
 
-There's a docker compose file in the repo so you don't have to bother a real
-network while hacking:
-
 ```sh
-docker-compose up -d    # Ergo on port 6667
+docker-compose up -d             # Ergo on 6667
 zig build run -- local
 ```
 
-Open a second terminal with another nickname and you can test messaging,
-kicks, invites and topics against yourself.
+Open a second terminal with another nickname and test things against
+yourself.
+
+## The library
+
+`src/lib` is the protocol half: `Message` parses and formats IRC lines,
+`IrcClient` connects, sends commands and reads replies. `zig build` builds
+it alongside the client.
+
+## Tests
+
+```sh
+zig build test
+```
 
 ## TODO
 
-User tracking, channel state, message history. Possibly splitting the
-protocol handling into its own library at some point.
+User tracking, channel state, message history.
 
 Made by [@ilyeshdz](https://github.com/ilyeshdz)
