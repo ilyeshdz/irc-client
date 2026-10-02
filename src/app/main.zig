@@ -3,42 +3,22 @@ const Lib = @import("irc-client");
 const IrcClient = Lib.IrcClient;
 const Cfg = @import("config.zig");
 const Picker = @import("picker.zig");
-const utils = @import("utils.zig");
+const cli = @import("cli.zig");
 const format = @import("format.zig");
 const Display = @import("display.zig").Display;
 const runEventLoop = @import("input.zig").runEventLoop;
-
-const helpMessage =
-    \\Usage: irc_client [OPTIONS] [HOST]
-    \\
-    \\Options:
-    \\  --help            Display this help message and exit
-    \\  --profile NAME    Connect using a saved profile configuration
-    \\
-    \\Arguments:
-    \\  HOST              Hostname or IP address to connect directly (e.g. '127.0.0.1' or 'local')
-    \\
-    \\If no arguments are provided, an interactive prompt will launch.
-    \\
-;
-
-// TODO: Replace it later / move it somewhere else
-pub fn findStringWithinSliceOfString(slice: []const []const u8, target: []const u8) bool {
-    for (slice) |item| {
-        if (std.mem.eql(u8, item, target)) {
-            return true;
-        }
-    }
-    return false;
-}
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const gpa = init.gpa;
     const args = try init.minimal.args.toSlice(gpa);
     defer gpa.free(args);
-    if (findStringWithinSliceOfString(args, "--help")) {
-        std.debug.print(helpMessage, .{});
+
+    const opts = cli.parseOrExit(cli.Options, gpa, args);
+    defer gpa.free(opts.positional);
+
+    if (opts.options.help) {
+        std.debug.print("{s}", .{cli.helpText});
         return;
     }
 
@@ -53,10 +33,10 @@ pub fn main(init: std.process.Init) !void {
     var have_choice = false;
     defer if (have_choice) choice.deinit();
 
-    if (utils.getValueForOption(args, "profile", true)) |val| {
-        const p = cfg.findProfile(val) orelse {
-            std.debug.print("unknown profile '{s}'.\n", .{args[2]});
-            return;
+    if (opts.options.profile) |name| {
+        const p = cfg.findProfile(name) orelse {
+            std.debug.print("unknown profile '{s}'.\n", .{name});
+            std.process.exit(1);
         };
         choice = .{
             .allocator = gpa,
@@ -67,11 +47,9 @@ pub fn main(init: std.process.Init) !void {
             .profile_name = try gpa.dupe(u8, p.name),
         };
         have_choice = true;
-    }
-
-    // Quick path for lcoal / host
-    if (args.len == 2) {
-        const arg_host = args[1];
+    } else if (opts.positional.len > 0) {
+        // Quick path for local / host
+        const arg_host = opts.positional[0];
         const host = if (std.mem.eql(u8, arg_host, "local")) "127.0.0.1" else arg_host;
         const nick = Picker.defaultNick(&cfg);
         choice = .{
@@ -113,11 +91,11 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test {
+    _ = @import("cli.zig");
     _ = @import("config.zig");
     _ = @import("display.zig");
     _ = @import("format.zig");
     _ = @import("input.zig");
     _ = @import("inputbox.zig");
     _ = @import("picker.zig");
-    _ = @import("utils.zig");
 }

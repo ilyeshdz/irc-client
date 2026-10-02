@@ -12,13 +12,15 @@ Needs [Zig](https://ziglang.org/) 0.16.
 
 ```sh
 zig build run                    # picker
-zig build run -- --profile home
+zig build run -- -p home         # --profile NAME
 zig build run -- local           # 127.0.0.1:6667
+zig build run -- --help          # all options
 ```
 
 No arguments and you get a picker: your profiles, recent servers, a few
 known ones. `n` saves a new connection. Profiles are plain JSON in
-`~/.config/irc-client/config`.
+`~/.config/irc-client/config`. Bad flags print an error and exit with
+code 2.
 
 `/help` lists the commands: join, part, msg, me, nick, topic, names, whois,
 who, mode, kick, invite, away, list, raw, quit. Plain TCP only, no TLS.
