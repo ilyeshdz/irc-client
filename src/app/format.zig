@@ -73,10 +73,18 @@ pub fn paintChannel(channel: []const u8, out: *[256]u8) []const u8 {
     return wrap(cyan ++ bold, channel, out);
 }
 
+/// Current wall-clock seconds since epoch, or null when no clock is
+/// available (e.g. in tests before an Io is set).
+pub fn nowSecs() ?i64 {
+    if (clock_override) |o| return o;
+    if (clock_io) |io| return std.Io.Timestamp.now(io, .real).toSeconds();
+    return null;
+}
+
 /// "12:34:56" UTC time of day into buf (always 8 bytes + sentinel).
 /// Falls back to "--:--:--" when no clock is available (e.g. in tests).
 pub fn timestamp(buf: *[16]u8) []const u8 {
-    const secs: i64 = if (clock_override) |o| o else if (clock_io) |io| std.Io.Timestamp.now(io, .real).toSeconds() else return "--:--:--";
+    const secs = nowSecs() orelse return "--:--:--";
     return timestampFromEpoch(secs, buf);
 }
 
@@ -91,6 +99,14 @@ pub fn timestampFromEpoch(epoch_secs: i64, buf: *[16]u8) []const u8 {
 
 pub fn dimTimestamp(buf: *[16]u8, styled: *[32]u8) []const u8 {
     const ts = timestamp(buf);
+    if (!isEnabled()) return ts;
+    return std.fmt.bufPrint(styled, "{s}{s}{s}", .{ dim, ts, reset }) catch ts;
+}
+
+/// Dim-styled "HH:MM:SS" for an arbitrary epoch second — used when replaying
+/// history, where each line must keep the time it was sent at.
+pub fn dimTimestampAt(epoch_secs: i64, buf: *[16]u8, styled: *[32]u8) []const u8 {
+    const ts = timestampFromEpoch(epoch_secs, buf);
     if (!isEnabled()) return ts;
     return std.fmt.bufPrint(styled, "{s}{s}{s}", .{ dim, ts, reset }) catch ts;
 }

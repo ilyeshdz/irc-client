@@ -7,6 +7,7 @@ const cli = @import("cli.zig");
 const build_options = @import("build_options");
 const format = @import("format.zig");
 const Display = @import("display.zig").Display;
+const History = @import("history.zig").History;
 const runEventLoop = @import("input.zig").runEventLoop;
 
 pub fn main(init: std.process.Init) !void {
@@ -83,10 +84,16 @@ pub fn main(init: std.process.Init) !void {
 
     try client.handshake(choice.nick, choice.realname);
 
+    // Chat history lives in ~/.config/irc-client/history (best effort: a
+    // corrupt file just means we start over, like the config does).
+    var history = History.load(gpa, io) catch History.init(gpa, io);
+    defer history.deinit();
+
     // The interface layer owns its own display state; seed it with our nick.
     var display = try Display.init(gpa);
     defer display.deinit();
     try display.setCurrentNick(choice.nick);
+    try display.setHistory(&history, choice.host);
 
     cfg.recordUse(choice.host, choice.port, choice.nick, choice.profile_name) catch {};
     if (cfg_path) |p| Cfg.save(&cfg, gpa, io, p) catch {
@@ -100,6 +107,7 @@ test {
     _ = @import("cli.zig");
     _ = @import("config.zig");
     _ = @import("display.zig");
+    _ = @import("history.zig");
     _ = @import("format.zig");
     _ = @import("input.zig");
     _ = @import("inputbox.zig");
