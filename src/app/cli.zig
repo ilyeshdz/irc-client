@@ -3,24 +3,30 @@ const std = @import("std");
 pub const Options = struct {
     help: bool = false,
     profile: ?[]const u8 = null,
+
+    pub const TAGS = .{ .help = .{ .desc = "Help command" }, .profile = .{ .desc = "Profile command" } };
 };
+
+fn generateFields(comptime source: type, comptime fields: anytype, comptime index: usize) []const u8 {
+    if (index >= fields.len) return "";
+    const field = fields[index];
+    const tag = @field(source.TAGS, field.name);
+    return " --" ++ field.name ++ "\t" ++ tag.desc ++ "\n" ++
+        generateFields(source, fields, index + 1);
+}
+
+pub fn generateHelpText(comptime o: type) []const u8 {
+    const FIRST_LINE = "Usage: irc_client [OPTIONS]";
+    const SECOND_LINE = "\n\nOptions:\n";
+
+    return FIRST_LINE ++ SECOND_LINE ++
+        generateFields(o, @typeInfo(o).@"struct".fields, 0);
+}
 
 // Short aliases, keyed by field name of `Options`.
 const shorts = .{ .help = 'h', .profile = 'p' };
 
-pub const helpText =
-    \\Usage: irc_client [OPTIONS] [HOST]
-    \\
-    \\Options:
-    \\  -h, --help          Display this help message and exit
-    \\  -p, --profile NAME  Connect using a saved profile configuration
-    \\
-    \\Arguments:
-    \\  HOST                Hostname or IP address to connect directly (e.g. '127.0.0.1' or 'local')
-    \\
-    \\If no arguments are provided, an interactive prompt will launch.
-    \\
-;
+pub const helpText = generateHelpText(Options);
 
 pub const ErrorKind = enum { unknown_flag, missing_value, unexpected_value, out_of_memory };
 
