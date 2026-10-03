@@ -4,7 +4,7 @@ pub const Options = struct {
     help: bool = false,
     profile: ?[]const u8 = null,
 
-    pub const TAGS = .{ .help = .{ .desc = "Help command" }, .profile = .{ .desc = "Profile command" } };
+    pub const TAGS = .{ .help = .{ .desc = "Display this help message and exit" }, .profile = .{ .desc = "Connect using a saved profile configuration" } };
 };
 
 fn generateFields(comptime source: type, comptime fields: anytype, comptime index: usize) []const u8 {
