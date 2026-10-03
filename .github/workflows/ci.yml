@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Cache zig
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            ~/.cache/zig
+          key: zig-${{ runner.os }}-${{ hashFiles('build.zig', 'src/**/*.zig') }}
+          restore-keys: zig-${{ runner.os }}-
+
+      - name: Check formatting
+        run: zig fmt --check .
+
+      - name: Test
+        run: zig build test
+
+      - name: Build (ReleaseSafe)
+        run: zig build -Doptimize=ReleaseSafe

@@ -2,9 +2,14 @@ const std = @import("std");
 
 pub const Options = struct {
     help: bool = false,
+    version: bool = false,
     profile: ?[]const u8 = null,
 
-    pub const TAGS = .{ .help = .{ .desc = "Display this help message and exit" }, .profile = .{ .desc = "Connect using a saved profile configuration" } };
+    pub const TAGS = .{
+        .help = .{ .desc = "Display this help message and exit" },
+        .version = .{ .desc = "Display version information and exit" },
+        .profile = .{ .desc = "Connect using a saved profile configuration" },
+    };
 };
 
 fn generateFields(comptime source: type, comptime fields: anytype, comptime index: usize) []const u8 {
@@ -24,7 +29,7 @@ pub fn generateHelpText(comptime o: type) []const u8 {
 }
 
 // Short aliases, keyed by field name of `Options`.
-const shorts = .{ .help = 'h', .profile = 'p' };
+const shorts = .{ .help = 'h', .version = 'V', .profile = 'p' };
 
 pub const helpText = generateHelpText(Options);
 

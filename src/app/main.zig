@@ -4,6 +4,7 @@ const IrcClient = Lib.IrcClient;
 const Cfg = @import("config.zig");
 const Picker = @import("picker.zig");
 const cli = @import("cli.zig");
+const build_options = @import("build_options");
 const format = @import("format.zig");
 const Display = @import("display.zig").Display;
 const runEventLoop = @import("input.zig").runEventLoop;
@@ -19,6 +20,11 @@ pub fn main(init: std.process.Init) !void {
 
     if (opts.options.help) {
         std.debug.print("{s}", .{cli.helpText});
+        return;
+    }
+
+    if (opts.options.version) {
+        std.debug.print("irc_client {s} (zig {s})\n", .{ build_options.version, @import("builtin").zig_version_string });
         return;
     }
 

@@ -3,11 +3,18 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const version = b.option([]const u8, "version", "Version reported by --version") orelse "dev";
+    const strip = b.option(bool, "strip", "Strip debug info from binaries");
+
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", version);
 
     const lib_module = b.createModule(.{
         .root_source_file = b.path("src/lib/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
+        .strip = strip,
     });
 
     const lib = b.addLibrary(.{
@@ -23,8 +30,11 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/app/main.zig"),
             .optimize = optimize,
             .target = target,
+            .link_libc = true,
+            .strip = strip,
             .imports = &.{
                 .{ .name = "irc-client", .module = lib_module },
+                .{ .name = "build_options", .module = build_options.createModule() },
             },
         }),
     });
