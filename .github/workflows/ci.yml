@@ -35,8 +35,23 @@ jobs:
       - name: Check formatting
         run: zig fmt --check .
 
+      # fmt only parses; ast-check also catches unused locals and shadowed
+      # names, which is where most of our mistakes actually come from.
+      - name: Lint
+        run: |
+          for f in $(find src -name '*.zig'); do
+            zig ast-check "$f"
+          done
+
       - name: Test
         run: zig build test
 
       - name: Build (ReleaseSafe)
         run: zig build -Doptimize=ReleaseSafe
+
+      # We only claim Unix support, so make sure the POSIX assumptions hold
+      # somewhere other than the host we happen to be building on.
+      - name: Cross-compile (Linux musl)
+        run: |
+          zig build -Dtarget=x86_64-linux-musl
+          zig build -Dtarget=aarch64-linux-musl
