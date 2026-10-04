@@ -1,4 +1,5 @@
 const std = @import("std");
+const out = @import("out.zig");
 const Lib = @import("irc-client");
 const IrcClient = Lib.IrcClient;
 const Cfg = @import("config.zig");
@@ -20,12 +21,12 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(opts.positional);
 
     if (opts.options.help) {
-        std.debug.print("{s}", .{cli.helpText});
+        out.print("{s}", .{cli.helpText});
         return;
     }
 
     if (opts.options.version) {
-        std.debug.print("irc_client {s} (zig {s})\n", .{ build_options.version, @import("builtin").zig_version_string });
+        out.print("irc_client {s} (zig {s})\n", .{ build_options.version, @import("builtin").zig_version_string });
         return;
     }
 
@@ -42,7 +43,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (opts.options.profile) |name| {
         const p = cfg.findProfile(name) orelse {
-            std.debug.print("unknown profile '{s}'.\n", .{name});
+            out.print("unknown profile '{s}'.\n", .{name});
             std.process.exit(1);
         };
         choice = .{
@@ -75,7 +76,7 @@ pub fn main(init: std.process.Init) !void {
         if (cfg_path) |p| Cfg.save(&cfg, gpa, io, p) catch {};
     }
 
-    std.debug.print("connecting to {s}:{d} as {s}…\n", .{ choice.host, choice.port, choice.nick });
+    out.print("connecting to {s}:{d} as {s}…\n", .{ choice.host, choice.port, choice.nick });
 
     // Plain TCP only (no TLS), so 6667-style ports.
     format.setIo(io);
@@ -97,7 +98,7 @@ pub fn main(init: std.process.Init) !void {
 
     cfg.recordUse(choice.host, choice.port, choice.nick, choice.profile_name) catch {};
     if (cfg_path) |p| Cfg.save(&cfg, gpa, io, p) catch {
-        std.debug.print("warning: could not save config to {s}\n", .{p});
+        out.print("warning: could not save config to {s}\n", .{p});
     };
 
     try runEventLoop(&client, &display);

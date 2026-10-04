@@ -1,4 +1,5 @@
 const std = @import("std");
+const out = @import("out.zig");
 
 pub const Options = struct {
     help: bool = false,
@@ -131,16 +132,16 @@ pub fn parseOrExit(comptime T: type, gpa: std.mem.Allocator, args: []const [:0]c
 
 pub fn fail(e: Error, prog: []const u8) noreturn {
     printError(e);
-    std.debug.print("Run '{s} --help' for usage.\n", .{prog});
+    out.print("Run '{s} --help' for usage.\n", .{prog});
     std.process.exit(2);
 }
 
 pub fn printError(e: Error) void {
     switch (e.kind) {
-        .unknown_flag => std.debug.print("unknown flag '{s}'\n", .{e.flag}),
-        .missing_value => std.debug.print("missing value for '--{s}'\n", .{e.flag}),
-        .unexpected_value => std.debug.print("option '--{s}' does not take a value\n", .{e.flag}),
-        .out_of_memory => std.debug.print("out of memory\n", .{}),
+        .unknown_flag => out.print("unknown flag '{s}'\n", .{e.flag}),
+        .missing_value => out.print("missing value for '--{s}'\n", .{e.flag}),
+        .unexpected_value => out.print("option '--{s}' does not take a value\n", .{e.flag}),
+        .out_of_memory => out.print("out of memory\n", .{}),
     }
 }
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const out = @import("out.zig");
 const Lib = @import("irc-client");
 const IrcClient = Lib.IrcClient;
 const Display = @import("display.zig").Display;
@@ -187,7 +188,7 @@ pub fn executeCommand(client: *IrcClient, display: *Display, cmd: Command) !Outc
         .List => {
             display.beginList();
             try client.listChannels();
-            std.debug.print("Requesting channel list...\n", .{});
+            out.print("Requesting channel list...\n", .{});
         },
         .Nick => |nick| {
             try client.changeNick(nick);
@@ -226,18 +227,18 @@ pub fn executeCommand(client: *IrcClient, display: *Display, cmd: Command) !Outc
         },
         .Me => |m| {
             const target = m.target orelse {
-                std.debug.print("No current channel. Use /join first.\n", .{});
+                out.print("No current channel. Use /join first.\n", .{});
                 return .keep;
             };
             if (target.len == 0) {
-                std.debug.print("No current channel. Use /join first.\n", .{});
+                out.print("No current channel. Use /join first.\n", .{});
                 return .keep;
             }
             try client.sendAction(target, m.text);
             display.echoSent(target, m.text, true);
         },
         .Unknown => |unknown_cmd| {
-            std.debug.print("Unknown command: /{s}. Type /help for help.\n", .{unknown_cmd});
+            out.print("Unknown command: /{s}. Type /help for help.\n", .{unknown_cmd});
         },
     }
     return .keep;
@@ -246,43 +247,43 @@ pub fn executeCommand(client: *IrcClient, display: *Display, cmd: Command) !Outc
 fn printHelp() void {
     const f = @import("format.zig");
     if (f.isEnabled()) {
-        std.debug.print("\n{s}{s}commands{s}\n", .{ f.bold, f.cyan, f.reset });
+        out.print("\n{s}{s}commands{s}\n", .{ f.bold, f.cyan, f.reset });
     } else {
-        std.debug.print("\nAvailable commands:\n", .{});
+        out.print("\nAvailable commands:\n", .{});
     }
-    std.debug.print("  /join <channel>          - Join a channel (alias: /j)\n", .{});
-    std.debug.print("  /part <channel> [reason] - Leave a channel (alias: /p)\n", .{});
-    std.debug.print("  /msg <target> <text>     - Send a message (alias: /m)\n", .{});
-    std.debug.print("  /me <action>             - Send an action to current channel\n", .{});
-    std.debug.print("  /nick <nick>             - Change nickname (alias: /n)\n", .{});
-    std.debug.print("  /topic [chan] [text]     - Show or set topic (alias: /t)\n", .{});
-    std.debug.print("  /names [channel]         - List users in a channel\n", .{});
-    std.debug.print("  /whois <nick>            - Show info about a user (alias: /w)\n", .{});
-    std.debug.print("  /who [channel]           - List users with details\n", .{});
-    std.debug.print("  /mode [target] [modes]   - Show or change modes\n", .{});
-    std.debug.print("  /kick <chan> <nick> [r]  - Kick a user (alias: /k)\n", .{});
-    std.debug.print("  /invite <nick> [chan]    - Invite a user (alias: /i)\n", .{});
-    std.debug.print("  /away [message]          - Set or clear away status\n", .{});
-    std.debug.print("  /list                    - List channels (alias: /l)\n", .{});
-    std.debug.print("  /raw <cmd> [params]      - Send raw IRC command (alias: /r)\n", .{});
-    std.debug.print("  /quit [reason]           - Disconnect from server (alias: /q)\n", .{});
-    std.debug.print("  /reconnect               - Reopen the connection to the server\n", .{});
-    std.debug.print("  /help                    - Show this help (alias: /h)\n", .{});
-    std.debug.print("  <text>                   - Send message to current channel\n", .{});
-    std.debug.print("\n", .{});
+    out.print("  /join <channel>          - Join a channel (alias: /j)\n", .{});
+    out.print("  /part <channel> [reason] - Leave a channel (alias: /p)\n", .{});
+    out.print("  /msg <target> <text>     - Send a message (alias: /m)\n", .{});
+    out.print("  /me <action>             - Send an action to current channel\n", .{});
+    out.print("  /nick <nick>             - Change nickname (alias: /n)\n", .{});
+    out.print("  /topic [chan] [text]     - Show or set topic (alias: /t)\n", .{});
+    out.print("  /names [channel]         - List users in a channel\n", .{});
+    out.print("  /whois <nick>            - Show info about a user (alias: /w)\n", .{});
+    out.print("  /who [channel]           - List users with details\n", .{});
+    out.print("  /mode [target] [modes]   - Show or change modes\n", .{});
+    out.print("  /kick <chan> <nick> [r]  - Kick a user (alias: /k)\n", .{});
+    out.print("  /invite <nick> [chan]    - Invite a user (alias: /i)\n", .{});
+    out.print("  /away [message]          - Set or clear away status\n", .{});
+    out.print("  /list                    - List channels (alias: /l)\n", .{});
+    out.print("  /raw <cmd> [params]      - Send raw IRC command (alias: /r)\n", .{});
+    out.print("  /quit [reason]           - Disconnect from server (alias: /q)\n", .{});
+    out.print("  /reconnect               - Reopen the connection to the server\n", .{});
+    out.print("  /help                    - Show this help (alias: /h)\n", .{});
+    out.print("  <text>                   - Send message to current channel\n", .{});
+    out.print("\n", .{});
 }
 
 /// Extract the next complete line from the stdin buffer, consuming it.
-/// Returns a slice of `out` without the trailing `\n`/`\r`, or null when
+/// Returns a slice of `dst` without the trailing `\n`/`\r`, or null when
 /// no full line is buffered yet.
-fn takeLine(input_buffer: *[1024]u8, input_len: *usize, out: *[1024]u8) ?[]const u8 {
+fn takeLine(input_buffer: *[1024]u8, input_len: *usize, dst: *[1024]u8) ?[]const u8 {
     const newline_idx = std.mem.indexOfScalar(u8, input_buffer[0..input_len.*], '\n') orelse return null;
     const clean = std.mem.trimEnd(u8, input_buffer[0..newline_idx], "\r");
-    @memcpy(out[0..clean.len], clean);
+    @memcpy(dst[0..clean.len], clean);
     const remaining = input_len.* - (newline_idx + 1);
     std.mem.copyForwards(u8, input_buffer[0..remaining], input_buffer[newline_idx + 1 .. input_len.*]);
     input_len.* = remaining;
-    return out[0..clean.len];
+    return dst[0..clean.len];
 }
 
 /// Reconnect backoff: 1s, doubling up to `max_retry_ms`.
@@ -509,7 +510,7 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
                 // A full buffer must not look like EOF: read() on an empty
                 // slice returns 0, which the check below takes as end of input.
                 if (input_len == input_buffer.len) {
-                    std.debug.print("Input too long (1024 bytes); discarded.\n", .{});
+                    out.print("Input too long (1024 bytes); discarded.\n", .{});
                     input_len = 0;
                 }
                 const bytes_read = try std.posix.read(stdin_fd, input_buffer[input_len..]);
@@ -569,11 +570,11 @@ fn routeOutcome(outcome: Outcome, connection_lost: *bool, reconnect_requested: *
 /// are never queued behind a reconnect.
 fn reportParseError(err: anyerror) void {
     if (err == error.NoCurrentChannel) {
-        std.debug.print("No current channel. Use /join first.\n", .{});
+        out.print("No current channel. Use /join first.\n", .{});
     } else if (err == error.MissingArgument) {
-        std.debug.print("Missing argument.\n", .{});
+        out.print("Missing argument.\n", .{});
     } else {
-        std.debug.print("Parse error: {}\n", .{err});
+        out.print("Parse error: {}\n", .{err});
     }
 }
 
@@ -585,9 +586,9 @@ fn executeParsed(client: *IrcClient, display: *Display, cmd: Command) Outcome {
         // error the user should see, not a reason to drop the session.
         if (!client.isConnected()) return .lost;
         if (err == error.MessageTooLong) {
-            std.debug.print("Message too long (512 byte IRC limit).\n", .{});
+            out.print("Message too long (512 byte IRC limit).\n", .{});
         } else {
-            std.debug.print("error: {s}\n", .{@errorName(err)});
+            out.print("error: {s}\n", .{@errorName(err)});
         }
         return .keep;
     };
@@ -741,22 +742,22 @@ test "reconnect command parses and the retry delay doubles up to its cap" {
 test "takeLine consumes each line exactly once" {
     const t = std.testing;
     var buf: [1024]u8 = undefined;
-    var out: [1024]u8 = undefined;
+    var dst: [1024]u8 = undefined;
     const data = "hello\n/join\n";
     @memcpy(buf[0..data.len], data);
     var len: usize = data.len;
 
-    const first = takeLine(&buf, &len, &out).?;
+    const first = takeLine(&buf, &len, &dst).?;
     try t.expectEqualStrings("hello", first);
-    // The returned slice aliases `out`; copy it before the next call.
+    // The returned slice aliases `dst`; copy it before the next call.
     var first_copy: [16]u8 = undefined;
     @memcpy(first_copy[0..first.len], first);
 
-    const second = takeLine(&buf, &len, &out).?;
+    const second = takeLine(&buf, &len, &dst).?;
     try t.expectEqualStrings("/join", second);
     try t.expectEqualStrings("hello", first_copy[0..first.len]);
     try t.expectEqual(@as(usize, 0), len);
-    try t.expect(takeLine(&buf, &len, &out) == null);
+    try t.expect(takeLine(&buf, &len, &dst) == null);
 }
 
 test "InputQueue holds lines in order, across the ring and up to its cap" {

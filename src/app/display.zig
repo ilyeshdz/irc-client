@@ -1,4 +1,5 @@
 const std = @import("std");
+const out = @import("out.zig");
 const Message = @import("irc-client").Message;
 const fmt = @import("format.zig");
 const hist = @import("history.zig");
@@ -12,8 +13,8 @@ const max_replay = 50;
 fn line(comptime f: []const u8, args: anytype) void {
     var tsb: [16]u8 = undefined;
     var tss: [32]u8 = undefined;
-    std.debug.print("{s} ", .{fmt.dimTimestamp(&tsb, &tss)});
-    std.debug.print(f, args);
+    out.print("{s} ", .{fmt.dimTimestamp(&tsb, &tss)});
+    out.print(f, args);
 }
 
 /// Print a channel event (join/part/quit/...) with a dim glyph prefix.
@@ -21,8 +22,8 @@ fn event(comptime f: []const u8, args: anytype) void {
     if (fmt.isEnabled()) {
         var tsb: [16]u8 = undefined;
         var tss: [32]u8 = undefined;
-        std.debug.print("{s} {s}*{s} ", .{ fmt.dimTimestamp(&tsb, &tss), fmt.dim, fmt.reset });
-        std.debug.print(f, args);
+        out.print("{s} {s}*{s} ", .{ fmt.dimTimestamp(&tsb, &tss), fmt.dim, fmt.reset });
+        out.print(f, args);
     } else {
         line("* " ++ f, args);
     }
@@ -32,8 +33,8 @@ fn errLine(comptime f: []const u8, args: anytype) void {
     if (fmt.isEnabled()) {
         var tsb: [16]u8 = undefined;
         var tss: [32]u8 = undefined;
-        std.debug.print("{s} {s}✗{s} ", .{ fmt.dimTimestamp(&tsb, &tss), fmt.red, fmt.reset });
-        std.debug.print(f, args);
+        out.print("{s} {s}✗{s} ", .{ fmt.dimTimestamp(&tsb, &tss), fmt.red, fmt.reset });
+        out.print(f, args);
     } else {
         line("error: " ++ f, args);
     }
@@ -47,7 +48,7 @@ fn statusLine(
     plain_args: anytype,
 ) void {
     if (fmt.isEnabled()) {
-        std.debug.print(colored_fmt, colored_args);
+        out.print(colored_fmt, colored_args);
     } else {
         line(plain_fmt, plain_args);
     }
@@ -159,11 +160,11 @@ pub const Display = struct {
         const win = replayWindow(msgs);
         if (win.len == 0) return;
 
-        std.debug.print("\n", .{});
+        out.print("\n", .{});
         if (fmt.isEnabled()) {
-            std.debug.print("{s}--- history: {d} of {d} messages ---{s}\n", .{ fmt.dim, win.len, msgs.len, fmt.reset });
+            out.print("{s}--- history: {d} of {d} messages ---{s}\n", .{ fmt.dim, win.len, msgs.len, fmt.reset });
         } else {
-            std.debug.print("--- history: {d} of {d} messages ---\n", .{ win.len, msgs.len });
+            out.print("--- history: {d} of {d} messages ---\n", .{ win.len, msgs.len });
         }
         for (win) |m| self.printHistoryLine(conv, m);
     }
@@ -182,20 +183,20 @@ pub const Display = struct {
             var chb: [256]u8 = undefined;
             const styled_conv = fmt.paintChannel(conv, &chb);
             if (parseAction(m.content) != null) {
-                std.debug.print("{s} {s} * {s} {s}\n", .{ ts, styled_conv, styled_nick, content });
+                out.print("{s} {s} * {s} {s}\n", .{ ts, styled_conv, styled_nick, content });
             } else {
-                std.debug.print("{s} {s} <{s}> {s}\n", .{ ts, styled_conv, styled_nick, content });
+                out.print("{s} {s} <{s}> {s}\n", .{ ts, styled_conv, styled_nick, content });
             }
             return;
         }
 
         const mine = if (self.current_nick) |me| std.mem.eql(u8, m.sender, me) else false;
         if (mine) {
-            std.debug.print("{s} PM to {s}: {s}\n", .{ ts, conv, content });
+            out.print("{s} PM to {s}: {s}\n", .{ ts, conv, content });
         } else if (parseAction(m.content) != null) {
-            std.debug.print("{s} * {s} {s}\n", .{ ts, styled_nick, content });
+            out.print("{s} * {s} {s}\n", .{ ts, styled_nick, content });
         } else {
-            std.debug.print("{s} PM from {s}: {s}\n", .{ ts, styled_nick, content });
+            out.print("{s} PM from {s}: {s}\n", .{ ts, styled_nick, content });
         }
     }
 
@@ -390,26 +391,26 @@ pub const Display = struct {
     fn printMOTD(self: *Display) void {
         const motd = std.mem.trimEnd(u8, self.motd_buffer.items, "\n");
         if (fmt.isEnabled()) {
-            std.debug.print("\n{s}╭─ MOTD ─────────────{s}\n", .{ fmt.cyan, fmt.reset });
+            out.print("\n{s}╭─ MOTD ─────────────{s}\n", .{ fmt.cyan, fmt.reset });
         } else {
-            std.debug.print("\n--- MOTD ---\n", .{});
+            out.print("\n--- MOTD ---\n", .{});
         }
         if (motd.len > 0) {
             var it = std.mem.splitScalar(u8, motd, '\n');
             while (it.next()) |l| {
                 if (fmt.isEnabled()) {
-                    std.debug.print("{s}│{s} {s}\n", .{ fmt.cyan, fmt.reset, l });
+                    out.print("{s}│{s} {s}\n", .{ fmt.cyan, fmt.reset, l });
                 } else {
-                    std.debug.print("{s}\n", .{l});
+                    out.print("{s}\n", .{l});
                 }
             }
         } else {
             line("(empty)\n", .{});
         }
         if (fmt.isEnabled()) {
-            std.debug.print("{s}╰────────────────────{s}\n\n", .{ fmt.cyan, fmt.reset });
+            out.print("{s}╰────────────────────{s}\n\n", .{ fmt.cyan, fmt.reset });
         } else {
-            std.debug.print("------------\n\n", .{});
+            out.print("------------\n\n", .{});
         }
     }
 
@@ -418,10 +419,10 @@ pub const Display = struct {
     fn handleListStart(self: *Display) void {
         self.in_channel_list = true;
         if (fmt.isEnabled()) {
-            std.debug.print("\n{s}{s}channels{s}  {s}users  topic{s}\n", .{ fmt.bold, fmt.cyan, fmt.reset, fmt.dim, fmt.reset });
-            std.debug.print("{s}─────────────────────────────{s}\n", .{ fmt.dim, fmt.reset });
+            out.print("\n{s}{s}channels{s}  {s}users  topic{s}\n", .{ fmt.bold, fmt.cyan, fmt.reset, fmt.dim, fmt.reset });
+            out.print("{s}─────────────────────────────{s}\n", .{ fmt.dim, fmt.reset });
         } else {
-            std.debug.print("\n--- Channels ---\n", .{});
+            out.print("\n--- Channels ---\n", .{});
         }
     }
 
@@ -449,9 +450,9 @@ pub const Display = struct {
         if (self.in_channel_list) {
             self.in_channel_list = false;
             if (fmt.isEnabled()) {
-                std.debug.print("{s}─────────────────────────────{s}\n\n", .{ fmt.dim, fmt.reset });
+                out.print("{s}─────────────────────────────{s}\n\n", .{ fmt.dim, fmt.reset });
             } else {
-                std.debug.print("------------------\n\n", .{});
+                out.print("------------------\n\n", .{});
             }
         } else if (self.list_refused) {
             errLine("Channel listing refused by the server (LIST is restricted here)\n\n", .{});
@@ -654,20 +655,20 @@ pub const Display = struct {
     }
 
     /// Join space-separated params (skipping empties) for MODE display.
-    fn joinParams(params: []const []const u8, out: *[256]u8) []const u8 {
+    fn joinParams(params: []const []const u8, buf: *[256]u8) []const u8 {
         var len: usize = 0;
         for (params) |p| {
             if (p.len == 0) continue;
             const sep: usize = if (len > 0) 1 else 0;
-            if (len + sep + p.len > out.len) break;
+            if (len + sep + p.len > buf.len) break;
             if (sep > 0) {
-                out[len] = ' ';
+                buf[len] = ' ';
                 len += 1;
             }
-            @memcpy(out[len .. len + p.len], p);
+            @memcpy(buf[len .. len + p.len], p);
             len += p.len;
         }
-        return out[0..len];
+        return buf[0..len];
     }
 
     fn handleNick(self: *Display, msg: Message) void {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const out = @import("out.zig");
 const format = @import("format.zig");
 
 /// A minimal bottom-of-screen input box: raw-mode line editing with the
@@ -35,7 +36,7 @@ pub const InputBox = struct {
         if (!self.raw) return;
         self.raw = false;
         // Clear the prompt line, then restore cooked mode.
-        std.debug.print("\r\x1b[K", .{});
+        out.print("\r\x1b[K", .{});
         std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.orig) catch {};
     }
 
@@ -100,7 +101,7 @@ pub const InputBox = struct {
     /// Erase the prompt line so server output can print above it.
     pub fn hide(self: *InputBox) void {
         if (!self.raw) return;
-        std.debug.print("\r\x1b[K", .{});
+        out.print("\r\x1b[K", .{});
     }
 
     /// Redraw the prompt line with the current buffer.
@@ -110,7 +111,7 @@ pub const InputBox = struct {
             var chb: [256]u8 = undefined;
             var nb: [256]u8 = undefined;
             const where = if (channel) |ch| format.paintChannel(ch, &chb) else "(lobby)";
-            std.debug.print("\r\x1b[K{s} {s} {s}›{s} {s}", .{
+            out.print("\r\x1b[K{s} {s} {s}›{s} {s}", .{
                 where,
                 format.dim,
                 format.paintNick(nick, &nb),
@@ -119,7 +120,7 @@ pub const InputBox = struct {
             });
         } else {
             const where = channel orelse "(lobby)";
-            std.debug.print("\r\x1b[K{s} {s} › {s}", .{ where, nick, self.buf[0..self.len] });
+            out.print("\r\x1b[K{s} {s} › {s}", .{ where, nick, self.buf[0..self.len] });
         }
     }
 };

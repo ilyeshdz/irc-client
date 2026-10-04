@@ -1,4 +1,5 @@
 const std = @import("std");
+const out = @import("out.zig");
 const Cfg = @import("config.zig");
 
 /// A resolved connection choice. All strings are owned; call deinit.
@@ -63,24 +64,24 @@ pub fn pick(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
         try entries.append(allocator, .{ .common = s });
     }
 
-    std.debug.print("\n{s}where to?{s}\n", .{ "\x1b[1m", "\x1b[0m" });
+    out.print("\n{s}where to?{s}\n", .{ "\x1b[1m", "\x1b[0m" });
     for (entries.items, 0..) |e, i| {
         switch (e) {
             .profile => |p| {
                 const star = if (p.favorite) " ★" else "";
                 const last = if (cfg.last_profile) |l| (if (std.mem.eql(u8, l, p.name)) " [last]" else "") else "";
-                std.debug.print("  {d}) {s} — {s} @ {s}:{d}{s}{s}\n", .{ i + 1, p.name, p.nick, p.host, p.port, star, last });
+                out.print("  {d}) {s} — {s} @ {s}:{d}{s}{s}\n", .{ i + 1, p.name, p.nick, p.host, p.port, star, last });
             },
             .recent => |r| {
-                std.debug.print("  {d}) {s}:{d} (recent{s}{s})\n", .{ i + 1, r.host, r.port, if (r.nick.len > 0) ", nick " else "", r.nick });
+                out.print("  {d}) {s}:{d} (recent{s}{s})\n", .{ i + 1, r.host, r.port, if (r.nick.len > 0) ", nick " else "", r.nick });
             },
             .common => |s| {
-                std.debug.print("  {d}) {s}:{d}\n", .{ i + 1, s.host, s.port });
+                out.print("  {d}) {s}:{d}\n", .{ i + 1, s.host, s.port });
             },
         }
     }
-    std.debug.print("  n) new connection…\n", .{});
-    std.debug.print("choice [1]: ", .{});
+    out.print("  n) new connection…\n", .{});
+    out.print("choice [1]: ", .{});
 
     const raw_choice = try readLine(allocator);
     defer allocator.free(raw_choice);
@@ -94,11 +95,11 @@ pub fn pick(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
         return resolveNew(cfg, allocator);
     }
     const n = std.fmt.parseInt(usize, trimmed, 10) catch {
-        std.debug.print("invalid choice, starting over with defaults.\n", .{});
+        out.print("invalid choice, starting over with defaults.\n", .{});
         return resolveEntry(cfg, allocator, entries.items[0]);
     };
     if (n == 0 or n > entries.items.len) {
-        std.debug.print("out of range, starting over with defaults.\n", .{});
+        out.print("out of range, starting over with defaults.\n", .{});
         return resolveEntry(cfg, allocator, entries.items[0]);
     }
     return resolveEntry(cfg, allocator, entries.items[n - 1]);
@@ -185,7 +186,7 @@ fn resolveNew(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
         };
         try cfg.upsertProfile(profile);
         choice.profile_name = try allocator.dupe(u8, name);
-        std.debug.print("saved profile '{s}'.\n", .{name});
+        out.print("saved profile '{s}'.\n", .{name});
     }
     return choice;
 }
@@ -203,7 +204,7 @@ pub fn defaultNick(cfg: *const Cfg.Config) []const u8 {
 /// Prompt for a value on cooked stdin; empty input keeps `default`.
 /// Returns an owned string.
 pub fn ask(allocator: std.mem.Allocator, prompt: []const u8, default: []const u8) ![]u8 {
-    std.debug.print("{s} [{s}]: ", .{ prompt, default });
+    out.print("{s} [{s}]: ", .{ prompt, default });
     const raw = try readLine(allocator);
     defer allocator.free(raw);
     const trimmed = std.mem.trim(u8, raw, " \r\n\t");
@@ -212,8 +213,8 @@ pub fn ask(allocator: std.mem.Allocator, prompt: []const u8, default: []const u8
 }
 
 fn readLine(allocator: std.mem.Allocator) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(allocator);
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
     // One byte at a time: a single read() may return several lines, and any
     // bytes past the first '\n' belong to the *next* prompt, so they must
     // not be swallowed here (piped input arrives all at once).
@@ -222,7 +223,7 @@ fn readLine(allocator: std.mem.Allocator) ![]u8 {
         const n = try std.posix.read(std.posix.STDIN_FILENO, &one);
         if (n == 0) break; // EOF
         if (one[0] == '\n') break;
-        try out.append(allocator, one[0]);
+        try buf.append(allocator, one[0]);
     }
-    return out.toOwnedSlice(allocator);
+    return buf.toOwnedSlice(allocator);
 }
