@@ -39,6 +39,20 @@ fn errLine(comptime f: []const u8, args: anytype) void {
     }
 }
 
+/// Green ✓ status line when colors are on, plain timestamped line otherwise.
+fn statusLine(
+    comptime colored_fmt: []const u8,
+    colored_args: anytype,
+    comptime plain_fmt: []const u8,
+    plain_args: anytype,
+) void {
+    if (fmt.isEnabled()) {
+        std.debug.print(colored_fmt, colored_args);
+    } else {
+        line(plain_fmt, plain_args);
+    }
+}
+
 pub const Display = struct {
     allocator: std.mem.Allocator,
     motd_buffer: std.ArrayList(u8),
@@ -209,6 +223,40 @@ pub const Display = struct {
         return self.motd_complete;
     }
 
+    /// Local status line (no server behind it).
+    pub fn info(self: *Display, comptime f: []const u8, args: anytype) void {
+        _ = self;
+        line(f, args);
+    }
+
+    /// Local error line (no server behind it).
+    pub fn err(self: *Display, comptime f: []const u8, args: anytype) void {
+        _ = self;
+        errLine(f, args);
+    }
+
+    /// The TCP connection is back; the server's 001 prints separately.
+    pub fn reconnected(self: *Display) void {
+        _ = self;
+        statusLine(
+            "{s}✓ reconnected{s}\n",
+            .{ fmt.green, fmt.reset },
+            "Reconnected\n",
+            .{},
+        );
+    }
+
+    /// Drop MOTD/LIST state owned by the connection that just died.
+    pub fn resetConnectionState(self: *Display) void {
+        self.collecting_motd = false;
+        self.motd_complete = false;
+        self.motd_buffer.clearRetainingCapacity();
+        self.in_channel_list = false;
+        self.list_pending = false;
+        self.list_count = 0;
+        self.list_refused = false;
+    }
+
     fn isCmd(msg: Message, name: []const u8) bool {
         return std.mem.eql(u8, msg.command, name);
     }
@@ -275,11 +323,12 @@ pub const Display = struct {
         } else if (isCmd(msg, "306")) {
             line("You are now marked as away\n", .{});
         } else if (isCmd(msg, "001")) {
-            if (fmt.isEnabled()) {
-                std.debug.print("{s}✓ connected{s} {s}\n", .{ fmt.green, fmt.reset, msg.trailing });
-            } else {
-                line("Connected: {s}\n", .{msg.trailing});
-            }
+            statusLine(
+                "{s}✓ connected{s} {s}\n",
+                .{ fmt.green, fmt.reset, msg.trailing },
+                "Connected: {s}\n",
+                .{msg.trailing},
+            );
         } else if (isCmd(msg, "002")) {
             line("Host: {s}\n", .{msg.trailing});
         } else if (isCmd(msg, "003")) {
@@ -1036,6 +1085,39 @@ test "empty LIST without refusal stays a plain empty list" {
     });
     try std.testing.expect(!d.list_pending);
     try std.testing.expect(!d.list_refused);
+}
+
+test "resetConnectionState clears what a dropped connection left behind" {
+    const t = std.testing;
+    var d = try Display.init(t.allocator);
+    defer d.deinit();
+    try d.setCurrentNick("tester");
+
+    d.collecting_motd = true;
+    try d.motd_buffer.appendSlice(t.allocator, "half a motd");
+    d.beginList();
+    d.list_count = 7;
+    d.in_channel_list = true;
+
+    d.resetConnectionState();
+
+    try t.expect(!d.collecting_motd);
+    try t.expect(!d.motd_complete);
+    try t.expectEqual(@as(usize, 0), d.motd_buffer.items.len);
+    try t.expect(!d.list_pending);
+    try t.expect(!d.list_refused);
+    try t.expect(!d.in_channel_list);
+    try t.expectEqual(@as(usize, 0), d.list_count);
+    // The conversation we were in is unaffected.
+    try t.expectEqualStrings("tester", d.current_nick.?);
+}
+
+test "local status lines print without a server behind them" {
+    var d = try Display.init(std.testing.allocator);
+    defer d.deinit();
+    d.info("reconnecting to {s}:{d}…\n", .{ "irc.example.org", 6667 });
+    d.err("connection lost\n", .{});
+    d.reconnected();
 }
 
 test "incoming and outgoing messages are recorded into history" {

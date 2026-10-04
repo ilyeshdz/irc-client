@@ -7,6 +7,13 @@ const MAX_MESSAGE_LENGTH = 512;
 pub const IrcClient = struct {
     io: std.Io,
     stream: net.Stream,
+    connected: bool = false,
+
+    // Kept for the lifetime of the client so a dropped socket can be reopened.
+    host: []const u8,
+    port: u16,
+    username: []const u8 = "",
+    realname: []const u8 = "",
 
     read_buffer: [MAX_MESSAGE_LENGTH]u8 = undefined,
     reader: ?net.Stream.Reader = null,
@@ -16,43 +23,137 @@ pub const IrcClient = struct {
 
     current_channel: ?[]const u8 = null,
 
+    /// Channels to rejoin after a reconnect.
+    channels: std.ArrayList([]const u8) = .empty,
+
     pub fn init(io: std.Io, host: []const u8, port: u16) !IrcClient {
-        const hostname = try net.HostName.init(host);
-        const stream = try hostname.connect(io, port, .{ .mode = .stream });
         const allocator = std.heap.page_allocator;
-        const client = IrcClient{
+        var client = IrcClient{
             .io = io,
-            .stream = stream,
+            .stream = undefined,
+            .host = try allocator.dupe(u8, host),
+            .port = port,
             .allocator = allocator,
             .current_nick = "",
-            .current_channel = null,
         };
+        // The struct now owns `host`, so deinit is the single owner from here
+        // on; a second free of the same slice would be a double free.
+        errdefer client.deinit();
+        try client.openStream();
         return client;
     }
 
+    /// Tests: a client with no socket, for exercising the bookkeeping only.
+    pub fn initForTest(allocator: std.mem.Allocator) IrcClient {
+        return .{
+            .io = undefined,
+            .stream = undefined,
+            .host = "",
+            .port = 6667,
+            .allocator = allocator,
+            .current_nick = "",
+        };
+    }
+
     pub fn deinit(self: *IrcClient) void {
-        self.stream.close(self.io);
-        if (self.current_nick.len > 0) self.allocator.free(self.current_nick);
-        if (self.current_channel) |c| {
-            if (c.len > 0) self.allocator.free(c);
-        }
+        self.closeStream();
+        // `free` of an empty slice is a no-op, so no length guards are needed.
+        self.allocator.free(self.host);
+        self.allocator.free(self.username);
+        self.allocator.free(self.realname);
+        self.allocator.free(self.current_nick);
+        if (self.current_channel) |c| self.allocator.free(c);
+        for (self.channels.items) |c| self.allocator.free(c);
+        self.channels.deinit(self.allocator);
     }
 
     /// Handshake with the IRC server, sending the NICK and USER commands.
     pub fn handshake(self: *IrcClient, username: []const u8, realname: []const u8) !void {
-        const owned_nick = try self.allocator.dupe(u8, username);
-        if (self.current_nick.len > 0) self.allocator.free(self.current_nick);
-        self.current_nick = owned_nick;
-        try self.send(Message{ .command = "NICK", .params = .{username} ++ .{""} ** 14 });
-        try self.send(Message{ .command = "USER", .params = .{ username, "0", "*", realname } ++ .{""} ** 11 });
+        try self.replaceOwned(&self.username, username);
+        try self.replaceOwned(&self.realname, realname);
+        try self.replaceOwned(&self.current_nick, username);
+        try self.register();
+    }
+
+    /// Store a copy of `src` in `dest`, freeing whatever was there before.
+    fn replaceOwned(self: *IrcClient, dest: *[]const u8, src: []const u8) !void {
+        const owned = try self.allocator.dupe(u8, src);
+        self.allocator.free(dest.*);
+        dest.* = owned;
+    }
+
+    fn openStream(self: *IrcClient) !void {
+        const hostname = try net.HostName.init(self.host);
+        const stream = try hostname.connect(self.io, self.port, .{ .mode = .stream });
+        self.stream = stream;
+        self.connected = true;
+        // The reader belonged to the previous socket.
+        self.reader = null;
+    }
+
+    /// Close the socket if it is open; safe to call twice.
+    fn closeStream(self: *IrcClient) void {
+        if (self.connected) self.stream.close(self.io);
+        self.connected = false;
+        self.reader = null;
+    }
+
+    pub fn isConnected(self: *const IrcClient) bool {
+        return self.connected;
+    }
+
+    /// Drop the socket without touching the remembered channels, so the
+    /// event loop stops polling a dead fd until a reconnect succeeds.
+    pub fn disconnect(self: *IrcClient) void {
+        self.closeStream();
+    }
+
+    /// The fd to hand to poll(); only meaningful while connected.
+    pub fn socketFd(self: *const IrcClient) std.posix.fd_t {
+        std.debug.assert(self.connected);
+        return self.stream.socket.handle;
+    }
+
+    /// Reopen the connection, register again and rejoin remembered channels.
+    pub fn reconnect(self: *IrcClient) !void {
+        self.closeStream();
+        try self.openStream();
+        errdefer self.closeStream();
+        try self.register();
+        // Not `joinChannel`: the channels are already remembered.
+        for (self.channels.items) |channel| {
+            try self.send(Message{ .command = "JOIN", .params = .{channel} ++ .{""} ** 14 });
+        }
+    }
+
+    /// NICK + USER for the current socket, under the current nick.
+    fn register(self: *IrcClient) !void {
+        const nick = if (self.current_nick.len > 0) self.current_nick else self.username;
+        try self.send(Message{ .command = "NICK", .params = .{nick} ++ .{""} ** 14 });
+        try self.send(Message{ .command = "USER", .params = .{ self.username, "0", "*", self.realname } ++ .{""} ** 11 });
     }
 
     /// Send a raw IRC command to the server.
     pub fn send(self: *IrcClient, message: Message) !void {
-        var buffer: [512]u8 = undefined;
+        if (!self.connected) return error.NotConnected;
+
+        // Format into a complete line first: an over-long message must never
+        // reach the wire half-written, and must not be mistaken for a socket
+        // failure (that would trigger a pointless reconnect).
+        var line: [MAX_MESSAGE_LENGTH]u8 = undefined;
+        var fixed = std.Io.Writer.fixed(&line);
+        message.format(&fixed) catch return error.MessageTooLong;
+
+        var buffer: [MAX_MESSAGE_LENGTH]u8 = undefined;
         var writer = self.stream.writer(self.io, &buffer);
-        try message.format(&writer.interface);
-        try writer.interface.flush();
+        writer.interface.writeAll(fixed.buffered()) catch |err| {
+            self.closeStream(); // the socket died, not the message
+            return err;
+        };
+        writer.interface.flush() catch |err| {
+            self.closeStream();
+            return err;
+        };
     }
 
     /// Send a raw command with variable parameters.
@@ -60,8 +161,9 @@ pub const IrcClient = struct {
         try self.send(Message{ .command = command, .params = .{params} ++ .{""} ** 14 });
     }
 
-    /// Join a channel.
+    /// Join a channel (remembered for reconnects).
     pub fn joinChannel(self: *IrcClient, channel: []const u8) !void {
+        try self.rememberChannel(channel);
         try self.send(Message{ .command = "JOIN", .params = .{channel} ++ .{""} ** 14 });
     }
 
@@ -161,6 +263,7 @@ pub const IrcClient = struct {
 
     /// Leave a channel with an optional reason.
     pub fn partChannel(self: *IrcClient, channel: []const u8, reason: ?[]const u8) !void {
+        self.forgetChannel(channel);
         if (reason) |r| {
             try self.send(Message{ .command = "PART", .params = .{channel} ++ .{""} ** 14, .trailing = r });
         } else {
@@ -181,7 +284,7 @@ pub const IrcClient = struct {
     /// Takes ownership of a copy; passing null or an empty slice clears it.
     pub fn setCurrentChannel(self: *IrcClient, channel: ?[]const u8) !void {
         if (self.current_channel) |c| {
-            if (c.len > 0) self.allocator.free(c);
+            self.allocator.free(c);
             self.current_channel = null;
         }
         if (channel) |ch| {
@@ -199,6 +302,66 @@ pub const IrcClient = struct {
         return null;
     }
 
+    /// Follow our own JOIN/PART/KICK so `channels` and `current_channel` stay
+    /// right even for `/raw JOIN` or a server-side kick: what the server says
+    /// we are in is what a reconnect should rejoin.
+    fn syncMembership(self: *IrcClient, msg: Message) void {
+        // For KICK the prefix is the kicker; the kicked nick is params[1].
+        if (std.mem.eql(u8, msg.command, "KICK")) {
+            if (self.isSelfNick(msg.params[1])) self.leaveChannel(msg.params[0]);
+            return;
+        }
+
+        const prefix = msg.prefix orelse return;
+        if (!self.isSelfNick(prefix)) return;
+        const channel = msg.params[0];
+        if (channel.len == 0) return;
+
+        if (std.mem.eql(u8, msg.command, "JOIN")) {
+            self.rememberChannel(channel) catch return;
+            self.setCurrentChannel(channel) catch return;
+        } else if (std.mem.eql(u8, msg.command, "PART")) {
+            self.leaveChannel(channel);
+        }
+    }
+
+    /// `nick_or_prefix` may be a bare nick or a `nick!user@host` prefix.
+    fn isSelfNick(self: *const IrcClient, nick_or_prefix: []const u8) bool {
+        if (self.current_nick.len == 0) return false;
+        const nick = if (std.mem.indexOfScalar(u8, nick_or_prefix, '!')) |i|
+            nick_or_prefix[0..i]
+        else
+            nick_or_prefix;
+        return std.mem.eql(u8, nick, self.current_nick);
+    }
+
+    /// Forget a channel we just left; drop it as the current target too.
+    fn leaveChannel(self: *IrcClient, channel: []const u8) void {
+        self.forgetChannel(channel);
+        if (self.getCurrentChannel()) |current| {
+            if (std.mem.eql(u8, current, channel)) self.setCurrentChannel(null) catch {};
+        }
+    }
+
+    fn rememberChannel(self: *IrcClient, channel: []const u8) !void {
+        if (channel.len == 0) return;
+        for (self.channels.items) |c| {
+            if (std.mem.eql(u8, c, channel)) return;
+        }
+        const owned = try self.allocator.dupe(u8, channel);
+        errdefer self.allocator.free(owned);
+        try self.channels.append(self.allocator, owned);
+    }
+
+    fn forgetChannel(self: *IrcClient, channel: []const u8) void {
+        for (self.channels.items, 0..) |c, i| {
+            if (!std.mem.eql(u8, c, channel)) continue;
+            self.allocator.free(c);
+            _ = self.channels.orderedRemove(i);
+            return;
+        }
+    }
+
     fn ensureReader(self: *IrcClient) *net.Stream.Reader {
         if (self.reader == null) {
             self.reader = self.stream.reader(self.io, &self.read_buffer);
@@ -211,18 +374,27 @@ pub const IrcClient = struct {
     /// has fresh data waiting (checked with a zero-timeout poll).
     /// This avoids stalling on lines stuck in the Reader's userspace buffer
     /// while poll() sleeps on an empty kernel buffer.
-    pub fn hasCompleteLine(self: *IrcClient, socket_fd: std.posix.fd_t) !bool {
+    /// Returns error.NotConnected while the socket is down, so a dropped
+    /// connection cannot be mistaken for a quiet one.
+    pub fn hasCompleteLine(self: *IrcClient) !bool {
+        if (!self.connected) return error.NotConnected;
         const r = self.ensureReader();
         if (std.mem.indexOfScalar(u8, r.interface.buffered(), '\n') != null) return true;
         var tmp = [_]std.posix.pollfd{
-            .{ .fd = socket_fd, .events = std.posix.POLL.IN, .revents = 0 },
+            .{ .fd = self.socketFd(), .events = std.posix.POLL.IN, .revents = 0 },
         };
         return try std.posix.poll(&tmp, 0) > 0;
     }
 
     pub fn readMessageInto(self: *IrcClient, buffer: []u8) !?Message {
+        if (!self.connected) return error.NotConnected;
         const r = self.ensureReader();
-        const line = try readUntilEndOfLine(&r.interface, buffer);
+        const line = readUntilEndOfLine(&r.interface, buffer) catch |err| {
+            // A truncated line is dropped, but the socket is still fine;
+            // anything else means the connection is gone.
+            if (err != error.MessageTooLong) self.closeStream();
+            return err;
+        };
 
         const msg = try Message.parse(line);
 
@@ -245,6 +417,8 @@ pub const IrcClient = struct {
                 }
             }
         }
+
+        self.syncMembership(msg);
 
         return msg;
     }
@@ -277,4 +451,53 @@ fn readUntilEndOfLine(reader: *std.Io.Reader, buf: []u8) ![]const u8 {
         buf[i] = byte;
         i += 1;
     }
+}
+
+test "joined channels are remembered once and dropped on part" {
+    // No socket needed: only the bookkeeping is exercised.
+    var client = IrcClient.initForTest(std.testing.allocator);
+    defer client.deinit();
+
+    try client.rememberChannel("#zig");
+    try client.rememberChannel("#zig");
+    try client.rememberChannel("#rust");
+    try std.testing.expectEqual(@as(usize, 2), client.channels.items.len);
+
+    client.forgetChannel("#zig");
+    client.forgetChannel("#zig");
+    try std.testing.expectEqual(@as(usize, 1), client.channels.items.len);
+    try std.testing.expectEqualStrings("#rust", client.channels.items[0]);
+
+    try client.rememberChannel("");
+    try std.testing.expectEqual(@as(usize, 1), client.channels.items.len);
+}
+
+test "our own JOIN/PART/KICK decide what a reconnect rejoins" {
+    const t = std.testing;
+    var client = IrcClient.initForTest(t.allocator);
+    defer client.deinit();
+    try client.replaceOwned(&client.current_nick, "tester");
+
+    // Someone else joining must not touch our membership.
+    client.syncMembership(try Message.parse(":alice!a@h JOIN #zig"));
+    try t.expectEqual(@as(usize, 0), client.channels.items.len);
+
+    // /raw JOIN goes through the server, not through joinChannel().
+    client.syncMembership(try Message.parse(":tester!u@h JOIN #zig"));
+    try t.expectEqual(@as(usize, 1), client.channels.items.len);
+    try t.expectEqualStrings("#zig", client.getCurrentChannel().?);
+
+    // Another channel joined the same way, then a server-side kick.
+    client.syncMembership(try Message.parse(":tester!u@h JOIN #rust"));
+    try t.expectEqual(@as(usize, 2), client.channels.items.len);
+    client.syncMembership(try Message.parse(":op!o@h KICK #zig tester :bye"));
+    try t.expectEqualStrings("#rust", client.getCurrentChannel().?);
+    try t.expectEqual(@as(usize, 1), client.channels.items.len);
+
+    // Our own PART forgets the channel; someone else's PART does not.
+    client.syncMembership(try Message.parse(":tester!u@h PART #rust"));
+    try t.expectEqual(@as(usize, 0), client.channels.items.len);
+    try t.expect(client.getCurrentChannel() == null);
+    client.syncMembership(try Message.parse(":alice!a@h PART #rust"));
+    try t.expectEqual(@as(usize, 0), client.channels.items.len);
 }
