@@ -1,8 +1,5 @@
 const std = @import("std");
 
-/// Tiny ANSI styling helpers: colors, timestamps and deterministic
-/// nick colors. No fullscreen TUI, just richer line output.
-/// Colors are disabled when NO_COLOR is set or stderr is not a tty.
 pub const reset = "\x1b[0m";
 pub const bold = "\x1b[1m";
 pub const dim = "\x1b[2m";

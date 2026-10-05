@@ -4,6 +4,7 @@ const Lib = @import("irc-client");
 const IrcClient = Lib.IrcClient;
 const Display = @import("display.zig").Display;
 const InputBox = @import("inputbox.zig").InputBox;
+const fmt = @import("format.zig");
 
 pub const Command = union(enum) {
     Join: []const u8,
@@ -244,33 +245,97 @@ pub fn executeCommand(client: *IrcClient, display: *Display, cmd: Command) !Outc
     return .keep;
 }
 
-fn printHelp() void {
-    const f = @import("format.zig");
-    if (f.isEnabled()) {
-        out.print("\n{s}{s}commands{s}\n", .{ f.bold, f.cyan, f.reset });
-    } else {
-        out.print("\nAvailable commands:\n", .{});
+const HelpRow = struct {
+    cmd: []const u8,
+    args: []const u8,
+    desc: []const u8,
+    alias: []const u8 = "",
+};
+
+/// The /help table. Column widths are derived from these rows at comptime, so
+/// entries never carry manual padding — add a row and the grid reflows.
+const help_rows = [_]HelpRow{
+    .{ .cmd = "/join", .args = "<channel>", .desc = "Join a channel", .alias = "(alias: /j)" },
+    .{ .cmd = "/part", .args = "<channel> [reason]", .desc = "Leave a channel", .alias = "(alias: /p)" },
+    .{ .cmd = "/msg", .args = "<target> <text>", .desc = "Send a message", .alias = "(alias: /m)" },
+    .{ .cmd = "/me", .args = "<action>", .desc = "Send an action to current channel" },
+    .{ .cmd = "/nick", .args = "<nick>", .desc = "Change nickname", .alias = "(alias: /n)" },
+    .{ .cmd = "/topic", .args = "[chan] [text]", .desc = "Show or set topic", .alias = "(alias: /t)" },
+    .{ .cmd = "/names", .args = "[channel]", .desc = "List users in a channel" },
+    .{ .cmd = "/whois", .args = "<nick>", .desc = "Show info about a user", .alias = "(alias: /w)" },
+    .{ .cmd = "/who", .args = "[channel]", .desc = "List users with details" },
+    .{ .cmd = "/mode", .args = "[target] [modes]", .desc = "Show or change modes" },
+    .{ .cmd = "/kick", .args = "<chan> <nick> [r]", .desc = "Kick a user", .alias = "(alias: /k)" },
+    .{ .cmd = "/invite", .args = "<nick> [chan]", .desc = "Invite a user", .alias = "(alias: /i)" },
+    .{ .cmd = "/away", .args = "[message]", .desc = "Set or clear away status" },
+    .{ .cmd = "/list", .args = "", .desc = "List channels", .alias = "(alias: /l)" },
+    .{ .cmd = "/raw", .args = "<cmd> [params]", .desc = "Send raw IRC command", .alias = "(alias: /r)" },
+    .{ .cmd = "/quit", .args = "[reason]", .desc = "Disconnect from server", .alias = "(alias: /q)" },
+    .{ .cmd = "/reconnect", .args = "", .desc = "Reopen the connection to the server" },
+    .{ .cmd = "/help", .args = "", .desc = "Show this help", .alias = "(alias: /h)" },
+    .{ .cmd = "<text>", .args = "", .desc = "Send message to current channel" },
+};
+
+fn spaces(comptime n: usize) []const u8 {
+    if (n == 0) return "";
+    return &([_]u8{' '} ** n);
+}
+
+fn pad(comptime s: []const u8, comptime width: usize) []const u8 {
+    if (s.len >= width) return s;
+    return s ++ spaces(width - s.len);
+}
+
+fn colWidth(comptime field: []const u8) usize {
+    var w: usize = 0;
+    for (help_rows) |row| w = @max(w, @field(row, field).len);
+    return w;
+}
+
+/// The description column only needs alignment for rows that show an alias
+/// after it, so alias-less rows never get trailing spaces.
+fn descWidth() usize {
+    var w: usize = 0;
+    for (help_rows) |row| {
+        if (row.alias.len != 0) w = @max(w, row.desc.len);
     }
-    out.print("  /join <channel>          - Join a channel (alias: /j)\n", .{});
-    out.print("  /part <channel> [reason] - Leave a channel (alias: /p)\n", .{});
-    out.print("  /msg <target> <text>     - Send a message (alias: /m)\n", .{});
-    out.print("  /me <action>             - Send an action to current channel\n", .{});
-    out.print("  /nick <nick>             - Change nickname (alias: /n)\n", .{});
-    out.print("  /topic [chan] [text]     - Show or set topic (alias: /t)\n", .{});
-    out.print("  /names [channel]         - List users in a channel\n", .{});
-    out.print("  /whois <nick>            - Show info about a user (alias: /w)\n", .{});
-    out.print("  /who [channel]           - List users with details\n", .{});
-    out.print("  /mode [target] [modes]   - Show or change modes\n", .{});
-    out.print("  /kick <chan> <nick> [r]  - Kick a user (alias: /k)\n", .{});
-    out.print("  /invite <nick> [chan]    - Invite a user (alias: /i)\n", .{});
-    out.print("  /away [message]          - Set or clear away status\n", .{});
-    out.print("  /list                    - List channels (alias: /l)\n", .{});
-    out.print("  /raw <cmd> [params]      - Send raw IRC command (alias: /r)\n", .{});
-    out.print("  /quit [reason]           - Disconnect from server (alias: /q)\n", .{});
-    out.print("  /reconnect               - Reopen the connection to the server\n", .{});
-    out.print("  /help                    - Show this help (alias: /h)\n", .{});
-    out.print("  <text>                   - Send message to current channel\n", .{});
-    out.print("\n", .{});
+    return w;
+}
+
+/// Build the whole menu as one string, twice: once with color escapes and
+/// once without. Colors are a runtime decision (TTY / NO_COLOR), so both
+/// variants are baked at comptime and `printHelp` picks one per call.
+fn generateHelp(comptime styled: bool) []const u8 {
+    const head: []const u8 = if (styled) fmt.bold ++ fmt.cyan else "";
+    const dim: []const u8 = if (styled) fmt.dim else "";
+    const name: []const u8 = if (styled) fmt.bold ++ fmt.yellow else "";
+    const rst: []const u8 = if (styled) fmt.reset else "";
+
+    const cw = @max(colWidth("cmd"), "COMMAND".len);
+    const aw = @max(colWidth("args"), "USAGE".len);
+    const dw = @max(descWidth(), "DESCRIPTION".len);
+
+    var text: []const u8 = "\n" ++ head ++ "Available commands" ++ rst ++ "\n\n";
+    text = text ++ "  " ++ dim ++ pad("COMMAND", cw) ++ "  " ++ pad("USAGE", aw) ++
+        "  " ++ pad("DESCRIPTION", dw) ++ "  ALIAS" ++ rst ++ "\n";
+    for (help_rows) |row| {
+        // Anything that is not a slash command (like `<text>`) stays neutral.
+        const code: []const u8 = if (std.mem.startsWith(u8, row.cmd, "/")) name else dim;
+        const tail: []const u8 = if (row.alias.len == 0)
+            row.desc
+        else
+            pad(row.desc, dw) ++ "  " ++ dim ++ row.alias ++ rst;
+        text = text ++ "  " ++ code ++ pad(row.cmd, cw) ++ rst ++ "  " ++
+            dim ++ pad(row.args, aw) ++ rst ++ "  " ++ tail ++ "\n";
+    }
+    return text ++ "\n";
+}
+
+const help_plain = generateHelp(false);
+const help_styled = generateHelp(true);
+
+fn printHelp() void {
+    out.print("{s}", .{if (fmt.isEnabled()) help_styled else help_plain});
 }
 
 /// Extract the next complete line from the stdin buffer, consuming it.
@@ -868,4 +933,67 @@ test "lines typed while down are queued, and only leave once accepted" {
     // With nothing to replay there is no outcome at all.
     var empty = InputQueue{};
     try t.expect(flushQueue(&client, &d, &empty) == null);
+}
+
+/// Drop SGR escape sequences (`\x1b[...m`) so the styled help can be compared
+/// against the plain one.
+fn stripAnsi(gpa: std.mem.Allocator, s: []const u8) ![]u8 {
+    var list: std.ArrayList(u8) = .empty;
+    errdefer list.deinit(gpa);
+    var i: usize = 0;
+    while (i < s.len) {
+        if (s[i] == '\x1b') {
+            i += 1;
+            if (i < s.len and s[i] == '[') {
+                i += 1;
+                while (i < s.len and !std.ascii.isAlphabetic(s[i])) i += 1;
+                if (i < s.len) i += 1;
+            }
+            continue;
+        }
+        try list.append(gpa, s[i]);
+        i += 1;
+    }
+    return list.toOwnedSlice(gpa);
+}
+
+test "every help row starts its columns on the same byte" {
+    const t = std.testing;
+    const cw = @max(colWidth("cmd"), "COMMAND".len);
+    const aw = @max(colWidth("args"), "USAGE".len);
+    const dw = @max(descWidth(), "DESCRIPTION".len);
+    const desc_at = 2 + cw + 2 + aw + 2;
+    const alias_at = desc_at + dw + 2;
+
+    var rows: usize = 0;
+    var lines = std.mem.splitScalar(u8, help_plain, '\n');
+    while (lines.next()) |line| {
+        const is_row = std.mem.startsWith(u8, line, "  /") or
+            std.mem.startsWith(u8, line, "  <");
+        if (!is_row) continue;
+        // The description starts right after two spaces, and nothing
+        // spills into the gap before it.
+        try t.expect(line.len > desc_at);
+        try t.expectEqual(@as(u8, ' '), line[desc_at - 1]);
+        try t.expect(line[desc_at] != ' ');
+        if (std.mem.indexOf(u8, line, "(alias:")) |idx|
+            try t.expectEqual(@as(usize, alias_at), idx);
+        try t.expect(line.len <= 80);
+        rows += 1;
+    }
+    try t.expectEqual(help_rows.len, rows);
+}
+
+test "the styled help is the plain grid plus color escapes" {
+    const t = std.testing;
+    try t.expect(std.mem.indexOf(u8, help_styled, "\x1b[") != null);
+    try t.expect(std.mem.indexOf(u8, help_plain, "\x1b[") == null);
+
+    const stripped = try stripAnsi(t.allocator, help_styled);
+    defer t.allocator.free(stripped);
+    try t.expectEqualStrings(help_plain, stripped);
+
+    // Colors wrap every field, they never change the visible text.
+    try t.expect(std.mem.indexOf(u8, help_styled, fmt.bold ++ fmt.yellow ++ "/join") != null);
+    try t.expect(std.mem.indexOf(u8, help_styled, fmt.dim ++ "(alias: /j)") != null);
 }

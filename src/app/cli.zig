@@ -7,9 +7,9 @@ pub const Options = struct {
     profile: ?[]const u8 = null,
 
     pub const TAGS = .{
-        .help = .{ .desc = "Display this help message and exit" },
-        .version = .{ .desc = "Display version information and exit" },
-        .profile = .{ .desc = "Connect using a saved profile configuration" },
+        .help = .{ .desc = "Display this help message and exit", .short = "h" },
+        .version = .{ .desc = "Display version information and exit", .short = "V" },
+        .profile = .{ .desc = "Connect using a saved profile configuration", .short = "p" },
     };
 };
 
@@ -17,7 +17,7 @@ fn generateFields(comptime source: type, comptime fields: anytype, comptime inde
     if (index >= fields.len) return "";
     const field = fields[index];
     const tag = @field(source.TAGS, field.name);
-    return " --" ++ field.name ++ "\t" ++ tag.desc ++ "\n" ++
+    return " --" ++ field.name ++ "\t" ++ tag.desc ++ "\t-" ++ tag.short ++ "\n" ++
         generateFields(source, fields, index + 1);
 }
 
