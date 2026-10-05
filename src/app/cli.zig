@@ -40,12 +40,10 @@ fn descWidth(comptime o: type) usize {
 /// from the option list at comptime, so entries never carry manual padding —
 /// add an option and the grid reflows.
 pub fn generateHelpText(comptime o: type) []const u8 {
-    const ow = @max(optionWidth(o), "OPTION".len);
-    const dw = @max(descWidth(o), "DESCRIPTION".len);
+    const ow = optionWidth(o);
+    const dw = descWidth(o);
 
     var text: []const u8 = "Usage: irc_client [OPTIONS]\n\nOptions:\n";
-    text = text ++ "  " ++ fmt.pad("OPTION", ow) ++ "  " ++
-        fmt.pad("DESCRIPTION", dw) ++ "  SHORT\n";
     inline for (@typeInfo(o).@"struct".fields) |field| {
         const tag = @field(o.TAGS, field.name);
         const takes_value = @typeInfo(field.type) == .optional;
@@ -185,8 +183,8 @@ test "every option starts its columns on the same byte" {
     // The --help text is plain: no escapes, just the grid.
     try t.expect(std.mem.indexOf(u8, helpText, "\x1b[") == null);
 
-    const ow = @max(optionWidth(Options), "OPTION".len);
-    const dw = @max(descWidth(Options), "DESCRIPTION".len);
+    const ow = optionWidth(Options);
+    const dw = descWidth(Options);
     const desc_at = 2 + ow + 2;
     const alias_at = desc_at + dw + 2;
 
