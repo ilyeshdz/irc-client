@@ -36,33 +36,26 @@ fn descWidth(comptime o: type) usize {
     return w;
 }
 
-/// Build the whole --help text as one string, twice: once with color escapes
-/// and once without. Colors are a runtime decision (TTY / NO_COLOR), so both
-/// variants are baked at comptime and the caller picks one per call.
-pub fn generateHelpText(comptime o: type, comptime styled: bool) []const u8 {
-    const head: []const u8 = if (styled) fmt.bold ++ fmt.cyan else "";
-    const key: []const u8 = if (styled) fmt.bold ++ fmt.yellow else "";
-    const dim: []const u8 = if (styled) fmt.dim else "";
-    const rst: []const u8 = if (styled) fmt.reset else "";
-
+/// Build the whole --help text as one string: the column widths are derived
+/// from the option list at comptime, so entries never carry manual padding —
+/// add an option and the grid reflows.
+pub fn generateHelpText(comptime o: type) []const u8 {
     const ow = @max(optionWidth(o), "OPTION".len);
     const dw = @max(descWidth(o), "DESCRIPTION".len);
 
-    var text: []const u8 = head ++ "Usage:" ++ rst ++ " irc_client [OPTIONS]\n\n" ++
-        head ++ "Options:" ++ rst ++ "\n";
-    text = text ++ "  " ++ dim ++ fmt.pad("OPTION", ow) ++ "  " ++
-        fmt.pad("DESCRIPTION", dw) ++ "  SHORT" ++ rst ++ "\n";
+    var text: []const u8 = "Usage: irc_client [OPTIONS]\n\nOptions:\n";
+    text = text ++ "  " ++ fmt.pad("OPTION", ow) ++ "  " ++
+        fmt.pad("DESCRIPTION", dw) ++ "  SHORT\n";
     inline for (@typeInfo(o).@"struct".fields) |field| {
         const tag = @field(o.TAGS, field.name);
         const takes_value = @typeInfo(field.type) == .optional;
         const name_part: []const u8 = "--" ++ field.name;
         const value_part = comptime valueSuffix(takes_value);
-        const value_seg: []const u8 = if (takes_value) dim ++ value_part ++ rst else "";
         const alias: []const u8 = "-" ++ tag.short;
-        text = text ++ "  " ++ key ++ name_part ++ value_seg ++
+        text = text ++ "  " ++ name_part ++ value_part ++
             fmt.spaces(ow - name_part.len - value_part.len) ++ "  " ++
             tag.desc ++ fmt.spaces(dw - tag.desc.len) ++ "  " ++
-            dim ++ alias ++ rst ++ "\n";
+            alias ++ "\n";
     }
     return text;
 }
@@ -70,8 +63,7 @@ pub fn generateHelpText(comptime o: type, comptime styled: bool) []const u8 {
 // Short aliases, keyed by field name of `Options`.
 const shorts = .{ .help = 'h', .version = 'V', .profile = 'p' };
 
-pub const helpText = generateHelpText(Options, false);
-pub const helpStyled = generateHelpText(Options, true);
+pub const helpText = generateHelpText(Options);
 
 pub const ErrorKind = enum { unknown_flag, missing_value, unexpected_value, out_of_memory };
 
@@ -190,6 +182,9 @@ fn oom() Error {
 
 test "every option starts its columns on the same byte" {
     const t = std.testing;
+    // The --help text is plain: no escapes, just the grid.
+    try t.expect(std.mem.indexOf(u8, helpText, "\x1b[") == null);
+
     const ow = @max(optionWidth(Options), "OPTION".len);
     const dw = @max(descWidth(Options), "DESCRIPTION".len);
     const desc_at = 2 + ow + 2;
@@ -209,19 +204,4 @@ test "every option starts its columns on the same byte" {
         rows += 1;
     }
     try t.expectEqual(@typeInfo(Options).@"struct".fields.len, rows);
-}
-
-test "the styled --help is the plain grid plus color escapes" {
-    const t = std.testing;
-    try t.expect(std.mem.indexOf(u8, helpStyled, "\x1b[") != null);
-    try t.expect(std.mem.indexOf(u8, helpText, "\x1b[") == null);
-
-    const stripped = try fmt.stripAnsi(t.allocator, helpStyled);
-    defer t.allocator.free(stripped);
-    try t.expectEqualStrings(helpText, stripped);
-
-    // Colors wrap the flags, the value placeholder and the section heads.
-    try t.expect(std.mem.indexOf(u8, helpStyled, fmt.bold ++ fmt.yellow ++ "--profile") != null);
-    try t.expect(std.mem.indexOf(u8, helpStyled, fmt.dim ++ " <value>") != null);
-    try t.expect(std.mem.indexOf(u8, helpStyled, fmt.bold ++ fmt.cyan ++ "Options:") != null);
 }
