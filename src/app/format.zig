@@ -108,6 +108,41 @@ pub fn dimTimestampAt(epoch_secs: i64, buf: *[16]u8, styled: *[32]u8) []const u8
     return std.fmt.bufPrint(styled, "{s}{s}{s}", .{ dim, ts, reset }) catch ts;
 }
 
+// Grid helpers shared by the /help and --help menus so both line up the
+// same way: column widths are computed at comptime and padded with spaces.
+
+pub fn spaces(comptime n: usize) []const u8 {
+    if (n == 0) return "";
+    return &([_]u8{' '} ** n);
+}
+
+pub fn pad(comptime s: []const u8, comptime width: usize) []const u8 {
+    if (s.len >= width) return s;
+    return s ++ spaces(width - s.len);
+}
+
+/// Drop SGR escape sequences (`\x1b[...m`) so a styled string can be compared
+/// against its plain form.
+pub fn stripAnsi(gpa: std.mem.Allocator, s: []const u8) ![]u8 {
+    var list: std.ArrayList(u8) = .empty;
+    errdefer list.deinit(gpa);
+    var i: usize = 0;
+    while (i < s.len) {
+        if (s[i] == '\x1b') {
+            i += 1;
+            if (i < s.len and s[i] == '[') {
+                i += 1;
+                while (i < s.len and !std.ascii.isAlphabetic(s[i])) i += 1;
+                if (i < s.len) i += 1;
+            }
+            continue;
+        }
+        try list.append(gpa, s[i]);
+        i += 1;
+    }
+    return list.toOwnedSlice(gpa);
+}
+
 test "nick color is deterministic" {
     setEnabled(true);
     defer setEnabled(false);

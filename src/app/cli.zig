@@ -1,5 +1,6 @@
 const std = @import("std");
 const out = @import("out.zig");
+const fmt = @import("format.zig");
 
 pub const Options = struct {
     help: bool = false,
@@ -13,26 +14,64 @@ pub const Options = struct {
     };
 };
 
-fn generateFields(comptime source: type, comptime fields: anytype, comptime index: usize) []const u8 {
-    if (index >= fields.len) return "";
-    const field = fields[index];
-    const tag = @field(source.TAGS, field.name);
-    return " --" ++ field.name ++ "\t" ++ tag.desc ++ "\t-" ++ tag.short ++ "\n" ++
-        generateFields(source, fields, index + 1);
+/// ` <value>` for options that consume one, nothing for bare flags.
+fn valueSuffix(comptime takes_value: bool) []const u8 {
+    return if (takes_value) " <value>" else "";
 }
 
-pub fn generateHelpText(comptime o: type) []const u8 {
-    const FIRST_LINE = "Usage: irc_client [OPTIONS]";
-    const SECOND_LINE = "\n\nOptions:\n";
+fn optionWidth(comptime o: type) usize {
+    var w: usize = 0;
+    inline for (@typeInfo(o).@"struct".fields) |field| {
+        const takes_value = @typeInfo(field.type) == .optional;
+        w = @max(w, ("--" ++ field.name ++ comptime valueSuffix(takes_value)).len);
+    }
+    return w;
+}
 
-    return FIRST_LINE ++ SECOND_LINE ++
-        generateFields(o, @typeInfo(o).@"struct".fields, 0);
+fn descWidth(comptime o: type) usize {
+    var w: usize = 0;
+    inline for (@typeInfo(o).@"struct".fields) |field| {
+        w = @max(w, @field(o.TAGS, field.name).desc.len);
+    }
+    return w;
+}
+
+/// Build the whole --help text as one string, twice: once with color escapes
+/// and once without. Colors are a runtime decision (TTY / NO_COLOR), so both
+/// variants are baked at comptime and the caller picks one per call.
+pub fn generateHelpText(comptime o: type, comptime styled: bool) []const u8 {
+    const head: []const u8 = if (styled) fmt.bold ++ fmt.cyan else "";
+    const key: []const u8 = if (styled) fmt.bold ++ fmt.yellow else "";
+    const dim: []const u8 = if (styled) fmt.dim else "";
+    const rst: []const u8 = if (styled) fmt.reset else "";
+
+    const ow = @max(optionWidth(o), "OPTION".len);
+    const dw = @max(descWidth(o), "DESCRIPTION".len);
+
+    var text: []const u8 = head ++ "Usage:" ++ rst ++ " irc_client [OPTIONS]\n\n" ++
+        head ++ "Options:" ++ rst ++ "\n";
+    text = text ++ "  " ++ dim ++ fmt.pad("OPTION", ow) ++ "  " ++
+        fmt.pad("DESCRIPTION", dw) ++ "  SHORT" ++ rst ++ "\n";
+    inline for (@typeInfo(o).@"struct".fields) |field| {
+        const tag = @field(o.TAGS, field.name);
+        const takes_value = @typeInfo(field.type) == .optional;
+        const name_part: []const u8 = "--" ++ field.name;
+        const value_part = comptime valueSuffix(takes_value);
+        const value_seg: []const u8 = if (takes_value) dim ++ value_part ++ rst else "";
+        const alias: []const u8 = "-" ++ tag.short;
+        text = text ++ "  " ++ key ++ name_part ++ value_seg ++
+            fmt.spaces(ow - name_part.len - value_part.len) ++ "  " ++
+            tag.desc ++ fmt.spaces(dw - tag.desc.len) ++ "  " ++
+            dim ++ alias ++ rst ++ "\n";
+    }
+    return text;
 }
 
 // Short aliases, keyed by field name of `Options`.
 const shorts = .{ .help = 'h', .version = 'V', .profile = 'p' };
 
-pub const helpText = generateHelpText(Options);
+pub const helpText = generateHelpText(Options, false);
+pub const helpStyled = generateHelpText(Options, true);
 
 pub const ErrorKind = enum { unknown_flag, missing_value, unexpected_value, out_of_memory };
 
@@ -147,4 +186,42 @@ pub fn printError(e: Error) void {
 
 fn oom() Error {
     return .{ .kind = .out_of_memory, .flag = "" };
+}
+
+test "every option starts its columns on the same byte" {
+    const t = std.testing;
+    const ow = @max(optionWidth(Options), "OPTION".len);
+    const dw = @max(descWidth(Options), "DESCRIPTION".len);
+    const desc_at = 2 + ow + 2;
+    const alias_at = desc_at + dw + 2;
+
+    var rows: usize = 0;
+    var lines = std.mem.splitScalar(u8, helpText, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "  --")) continue;
+        // The description starts right after two spaces, and the short
+        // alias sits at a fixed column after it.
+        try t.expect(line.len > alias_at);
+        try t.expectEqual(@as(u8, ' '), line[desc_at - 1]);
+        try t.expect(line[desc_at] != ' ');
+        try t.expectEqual(@as(u8, '-'), line[alias_at]);
+        try t.expect(line.len <= 80);
+        rows += 1;
+    }
+    try t.expectEqual(@typeInfo(Options).@"struct".fields.len, rows);
+}
+
+test "the styled --help is the plain grid plus color escapes" {
+    const t = std.testing;
+    try t.expect(std.mem.indexOf(u8, helpStyled, "\x1b[") != null);
+    try t.expect(std.mem.indexOf(u8, helpText, "\x1b[") == null);
+
+    const stripped = try fmt.stripAnsi(t.allocator, helpStyled);
+    defer t.allocator.free(stripped);
+    try t.expectEqualStrings(helpText, stripped);
+
+    // Colors wrap the flags, the value placeholder and the section heads.
+    try t.expect(std.mem.indexOf(u8, helpStyled, fmt.bold ++ fmt.yellow ++ "--profile") != null);
+    try t.expect(std.mem.indexOf(u8, helpStyled, fmt.dim ++ " <value>") != null);
+    try t.expect(std.mem.indexOf(u8, helpStyled, fmt.bold ++ fmt.cyan ++ "Options:") != null);
 }

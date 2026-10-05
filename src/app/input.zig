@@ -276,16 +276,6 @@ const help_rows = [_]HelpRow{
     .{ .cmd = "<text>", .args = "", .desc = "Send message to current channel" },
 };
 
-fn spaces(comptime n: usize) []const u8 {
-    if (n == 0) return "";
-    return &([_]u8{' '} ** n);
-}
-
-fn pad(comptime s: []const u8, comptime width: usize) []const u8 {
-    if (s.len >= width) return s;
-    return s ++ spaces(width - s.len);
-}
-
 fn colWidth(comptime field: []const u8) usize {
     var w: usize = 0;
     for (help_rows) |row| w = @max(w, @field(row, field).len);
@@ -316,17 +306,17 @@ fn generateHelp(comptime styled: bool) []const u8 {
     const dw = @max(descWidth(), "DESCRIPTION".len);
 
     var text: []const u8 = "\n" ++ head ++ "Available commands" ++ rst ++ "\n\n";
-    text = text ++ "  " ++ dim ++ pad("COMMAND", cw) ++ "  " ++ pad("USAGE", aw) ++
-        "  " ++ pad("DESCRIPTION", dw) ++ "  ALIAS" ++ rst ++ "\n";
+    text = text ++ "  " ++ dim ++ fmt.pad("COMMAND", cw) ++ "  " ++ fmt.pad("USAGE", aw) ++
+        "  " ++ fmt.pad("DESCRIPTION", dw) ++ "  ALIAS" ++ rst ++ "\n";
     for (help_rows) |row| {
         // Anything that is not a slash command (like `<text>`) stays neutral.
         const code: []const u8 = if (std.mem.startsWith(u8, row.cmd, "/")) name else dim;
         const tail: []const u8 = if (row.alias.len == 0)
             row.desc
         else
-            pad(row.desc, dw) ++ "  " ++ dim ++ row.alias ++ rst;
-        text = text ++ "  " ++ code ++ pad(row.cmd, cw) ++ rst ++ "  " ++
-            dim ++ pad(row.args, aw) ++ rst ++ "  " ++ tail ++ "\n";
+            fmt.pad(row.desc, dw) ++ "  " ++ dim ++ row.alias ++ rst;
+        text = text ++ "  " ++ code ++ fmt.pad(row.cmd, cw) ++ rst ++ "  " ++
+            dim ++ fmt.pad(row.args, aw) ++ rst ++ "  " ++ tail ++ "\n";
     }
     return text ++ "\n";
 }
@@ -935,28 +925,6 @@ test "lines typed while down are queued, and only leave once accepted" {
     try t.expect(flushQueue(&client, &d, &empty) == null);
 }
 
-/// Drop SGR escape sequences (`\x1b[...m`) so the styled help can be compared
-/// against the plain one.
-fn stripAnsi(gpa: std.mem.Allocator, s: []const u8) ![]u8 {
-    var list: std.ArrayList(u8) = .empty;
-    errdefer list.deinit(gpa);
-    var i: usize = 0;
-    while (i < s.len) {
-        if (s[i] == '\x1b') {
-            i += 1;
-            if (i < s.len and s[i] == '[') {
-                i += 1;
-                while (i < s.len and !std.ascii.isAlphabetic(s[i])) i += 1;
-                if (i < s.len) i += 1;
-            }
-            continue;
-        }
-        try list.append(gpa, s[i]);
-        i += 1;
-    }
-    return list.toOwnedSlice(gpa);
-}
-
 test "every help row starts its columns on the same byte" {
     const t = std.testing;
     const cw = @max(colWidth("cmd"), "COMMAND".len);
@@ -989,7 +957,7 @@ test "the styled help is the plain grid plus color escapes" {
     try t.expect(std.mem.indexOf(u8, help_styled, "\x1b[") != null);
     try t.expect(std.mem.indexOf(u8, help_plain, "\x1b[") == null);
 
-    const stripped = try stripAnsi(t.allocator, help_styled);
+    const stripped = try fmt.stripAnsi(t.allocator, help_styled);
     defer t.allocator.free(stripped);
     try t.expectEqualStrings(help_plain, stripped);
 

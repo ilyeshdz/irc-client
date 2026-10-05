@@ -21,7 +21,7 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(opts.positional);
 
     if (opts.options.help) {
-        out.print("{s}", .{cli.helpText});
+        out.print("{s}", .{if (format.isEnabled()) cli.helpStyled else cli.helpText});
         return;
     }
 
