@@ -301,13 +301,11 @@ fn generateHelp(comptime styled: bool) []const u8 {
     const name: []const u8 = if (styled) fmt.bold ++ fmt.yellow else "";
     const rst: []const u8 = if (styled) fmt.reset else "";
 
-    const cw = @max(colWidth("cmd"), "COMMAND".len);
-    const aw = @max(colWidth("args"), "USAGE".len);
-    const dw = @max(descWidth(), "DESCRIPTION".len);
+    const cw = colWidth("cmd");
+    const aw = colWidth("args");
+    const dw = descWidth();
 
     var text: []const u8 = "\n" ++ head ++ "Available commands" ++ rst ++ "\n\n";
-    text = text ++ "  " ++ dim ++ fmt.pad("COMMAND", cw) ++ "  " ++ fmt.pad("USAGE", aw) ++
-        "  " ++ fmt.pad("DESCRIPTION", dw) ++ "  ALIAS" ++ rst ++ "\n";
     for (help_rows) |row| {
         // Anything that is not a slash command (like `<text>`) stays neutral.
         const code: []const u8 = if (std.mem.startsWith(u8, row.cmd, "/")) name else dim;
@@ -927,9 +925,9 @@ test "lines typed while down are queued, and only leave once accepted" {
 
 test "every help row starts its columns on the same byte" {
     const t = std.testing;
-    const cw = @max(colWidth("cmd"), "COMMAND".len);
-    const aw = @max(colWidth("args"), "USAGE".len);
-    const dw = @max(descWidth(), "DESCRIPTION".len);
+    const cw = colWidth("cmd");
+    const aw = colWidth("args");
+    const dw = descWidth();
     const desc_at = 2 + cw + 2 + aw + 2;
     const alias_at = desc_at + dw + 2;
 
