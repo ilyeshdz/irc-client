@@ -8,15 +8,10 @@ pub const Message = struct {
     command: []const u8 = "",
     params: [MAX_PARAMS][]const u8 = .{""} ** MAX_PARAMS,
     trailing: []const u8 = "",
-    raw: []const u8 = "",
-
-    pub fn init(raw: []const u8) Message {
-        return .{ .raw = raw };
-    }
 
     /// Parses a message from a plain string into a `Message` struct.
     pub fn parse(line_in: []const u8) !Message {
-        var msg: Message = .init(line_in);
+        var msg: Message = .{};
         // IRC lines end with CRLF; strip any trailing \r / \n so they don't
         // leak into the trailing parameter.
         const line = std.mem.trimEnd(u8, line_in, "\r\n");
