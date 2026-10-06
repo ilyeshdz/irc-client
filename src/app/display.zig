@@ -177,12 +177,13 @@ pub const Display = struct {
         const ts = fmt.dimTimestampAt(m.timestamp, &tsb, &tss);
         var nb: [256]u8 = undefined;
         const styled_nick = fmt.paintNick(m.sender, &nb);
-        const content = parseAction(m.content) orelse m.content;
+        const action = parseAction(m.content);
+        const content = action orelse m.content;
 
         if (isChannelTarget(conv)) {
             var chb: [256]u8 = undefined;
             const styled_conv = fmt.paintChannel(conv, &chb);
-            if (parseAction(m.content) != null) {
+            if (action != null) {
                 out.print("{s} {s} * {s} {s}\n", .{ ts, styled_conv, styled_nick, content });
             } else {
                 out.print("{s} {s} <{s}> {s}\n", .{ ts, styled_conv, styled_nick, content });
@@ -193,7 +194,7 @@ pub const Display = struct {
         const mine = if (self.current_nick) |me| std.mem.eql(u8, m.sender, me) else false;
         if (mine) {
             out.print("{s} PM to {s}: {s}\n", .{ ts, conv, content });
-        } else if (parseAction(m.content) != null) {
+        } else if (action != null) {
             out.print("{s} * {s} {s}\n", .{ ts, styled_nick, content });
         } else {
             out.print("{s} PM from {s}: {s}\n", .{ ts, styled_nick, content });
