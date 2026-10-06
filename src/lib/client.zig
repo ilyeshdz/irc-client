@@ -1,8 +1,33 @@
 const std = @import("std");
 const Message = @import("message.zig").Message;
 const net = std.Io.net;
+const tls = std.crypto.tls;
+const Certificate = std.crypto.Certificate;
 
 const MAX_MESSAGE_LENGTH = 512;
+
+const TlsState = struct {
+    allocator: std.mem.Allocator,
+    sock_reader: net.Stream.Reader,
+    sock_writer: net.Stream.Writer,
+    sock_read_buf: []u8,
+    sock_write_buf: []u8,
+    tls_read_buf: []u8,
+    tls_write_buf: []u8,
+    tls_client: tls.Client,
+
+    fn destroy(self: *TlsState) void {
+        // Best effort close_notify; the socket is going away regardless.
+        self.tls_client.end() catch {};
+        self.sock_writer.interface.flush() catch {};
+        const alloc = self.allocator;
+        alloc.free(self.sock_read_buf);
+        alloc.free(self.sock_write_buf);
+        alloc.free(self.tls_read_buf);
+        alloc.free(self.tls_write_buf);
+        alloc.destroy(self);
+    }
+};
 
 pub const IrcClient = struct {
     io: std.Io,
@@ -12,6 +37,9 @@ pub const IrcClient = struct {
     // Kept for the lifetime of the client so a dropped socket can be reopened.
     host: []const u8,
     port: u16,
+    tls: bool = false,
+    insecure: bool = false,
+    tls_state: ?*TlsState = null,
     username: []const u8 = "",
     realname: []const u8 = "",
 
@@ -26,13 +54,24 @@ pub const IrcClient = struct {
     /// Channels to rejoin after a reconnect.
     channels: std.ArrayList([]const u8) = .empty,
 
+    pub const ConnectOptions = struct {
+        tls: bool = false,
+        insecure: bool = false,
+    };
+
     pub fn init(io: std.Io, host: []const u8, port: u16) !IrcClient {
+        return initOptions(io, host, port, .{});
+    }
+
+    pub fn initOptions(io: std.Io, host: []const u8, port: u16, opts: ConnectOptions) !IrcClient {
         const allocator = std.heap.page_allocator;
         var client = IrcClient{
             .io = io,
             .stream = undefined,
             .host = try allocator.dupe(u8, host),
             .port = port,
+            .tls = opts.tls,
+            .insecure = opts.insecure,
             .allocator = allocator,
             .current_nick = "",
         };
@@ -89,13 +128,97 @@ pub const IrcClient = struct {
         self.connected = true;
         // The reader belonged to the previous socket.
         self.reader = null;
+        if (self.tls) {
+            errdefer {
+                self.stream.close(self.io);
+                self.connected = false;
+            }
+            try self.startTls();
+        }
+    }
+
+    /// Run a TLS handshake over the already-connected TCP stream.
+    /// The CA bundle is only needed for the handshake, so it lives on the
+    /// stack here; the encrypted/plaintext buffers stay in `tls_state`.
+    fn startTls(self: *IrcClient) !void {
+        std.debug.assert(self.tls_state == null);
+        const alloc = self.allocator;
+        const state = try alloc.create(TlsState);
+        errdefer alloc.destroy(state);
+        state.allocator = alloc;
+        state.sock_read_buf = try alloc.alloc(u8, tls.Client.min_buffer_len);
+        errdefer alloc.free(state.sock_read_buf);
+        state.sock_write_buf = try alloc.alloc(u8, tls.Client.min_buffer_len);
+        errdefer alloc.free(state.sock_write_buf);
+        state.tls_read_buf = try alloc.alloc(u8, tls.Client.min_buffer_len);
+        errdefer alloc.free(state.tls_read_buf);
+        state.tls_write_buf = try alloc.alloc(u8, tls.Client.min_buffer_len);
+        errdefer alloc.free(state.tls_write_buf);
+
+        state.sock_reader = self.stream.reader(self.io, state.sock_read_buf);
+        state.sock_writer = self.stream.writer(self.io, state.sock_write_buf);
+
+        var entropy: [tls.Client.Options.entropy_len]u8 = undefined;
+        self.io.random(&entropy);
+        const realtime = std.Io.Clock.real.now(self.io);
+
+        if (self.insecure) {
+            state.tls_client = try tls.Client.init(
+                &state.sock_reader.interface,
+                &state.sock_writer.interface,
+                .{
+                    .host = .no_verification,
+                    .ca = .no_verification,
+                    .read_buffer = state.tls_read_buf,
+                    .write_buffer = state.tls_write_buf,
+                    .entropy = &entropy,
+                    .realtime_now = realtime,
+                },
+            );
+        } else {
+            var bundle: Certificate.Bundle = .empty;
+            defer bundle.deinit(alloc);
+            try bundle.rescan(alloc, self.io, realtime);
+            var lock: std.Io.RwLock = .init;
+            state.tls_client = try tls.Client.init(
+                &state.sock_reader.interface,
+                &state.sock_writer.interface,
+                .{
+                    .host = .{ .explicit = self.host },
+                    .ca = .{ .bundle = .{
+                        .gpa = alloc,
+                        .io = self.io,
+                        .lock = &lock,
+                        .bundle = &bundle,
+                    } },
+                    .read_buffer = state.tls_read_buf,
+                    .write_buffer = state.tls_write_buf,
+                    .entropy = &entropy,
+                    .realtime_now = realtime,
+                },
+            );
+            // Flush any handshake tail the TLS client left buffered.
+            state.sock_writer.interface.flush() catch {};
+        }
+        // The handshake wrote through the socket writer; make sure the
+        // bytes actually reached the wire before we return.
+        state.sock_writer.interface.flush() catch {};
+        self.tls_state = state;
     }
 
     /// Close the socket if it is open; safe to call twice.
     fn closeStream(self: *IrcClient) void {
+        if (self.tls_state) |state| {
+            state.destroy();
+            self.tls_state = null;
+        }
         if (self.connected) self.stream.close(self.io);
         self.connected = false;
         self.reader = null;
+    }
+
+    pub fn isTls(self: *const IrcClient) bool {
+        return self.tls;
     }
 
     pub fn isConnected(self: *const IrcClient) bool {
@@ -143,6 +266,22 @@ pub const IrcClient = struct {
         var line: [MAX_MESSAGE_LENGTH]u8 = undefined;
         var fixed = std.Io.Writer.fixed(&line);
         message.format(&fixed) catch return error.MessageTooLong;
+
+        if (self.tls_state) |state| {
+            state.tls_client.writer.writeAll(fixed.buffered()) catch |err| {
+                self.closeStream(); // the socket died, not the message
+                return err;
+            };
+            state.tls_client.writer.flush() catch |err| {
+                self.closeStream();
+                return err;
+            };
+            state.sock_writer.interface.flush() catch |err| {
+                self.closeStream();
+                return err;
+            };
+            return;
+        }
 
         var buffer: [MAX_MESSAGE_LENGTH]u8 = undefined;
         var writer = self.stream.writer(self.io, &buffer);
@@ -362,11 +501,16 @@ pub const IrcClient = struct {
         }
     }
 
-    fn ensureReader(self: *IrcClient) *net.Stream.Reader {
+    fn ensurePlainReader(self: *IrcClient) *net.Stream.Reader {
         if (self.reader == null) {
             self.reader = self.stream.reader(self.io, &self.read_buffer);
         }
         return &self.reader.?;
+    }
+
+    fn plaintextReader(self: *IrcClient) *std.Io.Reader {
+        if (self.tls_state) |state| return &state.tls_client.reader;
+        return &self.ensurePlainReader().interface;
     }
 
     /// Returns true if a complete server line can be read without blocking:
@@ -378,8 +522,8 @@ pub const IrcClient = struct {
     /// connection cannot be mistaken for a quiet one.
     pub fn hasCompleteLine(self: *IrcClient) !bool {
         if (!self.connected) return error.NotConnected;
-        const r = self.ensureReader();
-        if (std.mem.indexOfScalar(u8, r.interface.buffered(), '\n') != null) return true;
+        const r = self.plaintextReader();
+        if (std.mem.indexOfScalar(u8, r.buffered(), '\n') != null) return true;
         var tmp = [_]std.posix.pollfd{
             .{ .fd = self.socketFd(), .events = std.posix.POLL.IN, .revents = 0 },
         };
@@ -388,8 +532,8 @@ pub const IrcClient = struct {
 
     pub fn readMessageInto(self: *IrcClient, buffer: []u8) !?Message {
         if (!self.connected) return error.NotConnected;
-        const r = self.ensureReader();
-        const line = readUntilEndOfLine(&r.interface, buffer) catch |err| {
+        const r = self.plaintextReader();
+        const line = readUntilEndOfLine(r, buffer) catch |err| {
             // A truncated line is dropped, but the socket is still fine;
             // anything else means the connection is gone.
             if (err != error.MessageTooLong) self.closeStream();

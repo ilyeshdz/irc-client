@@ -46,41 +46,86 @@ pub fn main(init: std.process.Init) !void {
             out.print("unknown profile '{s}'\n", .{name});
             std.process.exit(1);
         };
+        var port = p.port;
+        if (opts.options.port) |port_str| {
+            port = std.fmt.parseInt(u16, port_str, 10) catch {
+                out.print("invalid port '{s}'\n", .{port_str});
+                std.process.exit(1);
+            };
+        }
         choice = .{
             .allocator = gpa,
             .host = try gpa.dupe(u8, p.host),
-            .port = p.port,
+            .port = port,
+            .tls = p.tls or opts.options.tls,
+            .insecure = opts.options.insecure,
             .nick = try gpa.dupe(u8, p.nick),
             .realname = try gpa.dupe(u8, p.realname),
             .profile_name = try gpa.dupe(u8, p.name),
         };
         have_choice = true;
     } else if (opts.positional.len > 0) {
-        // Quick path for local / host
+        // Quick path: `local`, `host`, `host:port`, or `host:+port`
+        // (`+` forces TLS). Flags still apply: --port overrides the
+        // port, --tls/--insecure force those modes on.
         const arg_host = opts.positional[0];
-        const host = if (std.mem.eql(u8, arg_host, "local")) "127.0.0.1" else arg_host;
+        const mapped = if (std.mem.eql(u8, arg_host, "local")) "127.0.0.1" else arg_host;
+        const split = Picker.splitHostPort(mapped);
+        const tls = (split.tls orelse false) or opts.options.tls;
+        var port: u16 = undefined;
+        if (opts.options.port) |port_str| {
+            port = std.fmt.parseInt(u16, port_str, 10) catch {
+                out.print("invalid port '{s}'\n", .{port_str});
+                std.process.exit(1);
+            };
+        } else if (split.port) |sp| {
+            port = sp;
+        } else {
+            port = if (tls) Cfg.default_tls_port else Cfg.default_port;
+        }
+        const host = if (std.mem.eql(u8, split.host, "local")) "127.0.0.1" else split.host;
         const nick = Picker.defaultNick(&cfg);
         choice = .{
             .allocator = gpa,
             .host = try gpa.dupe(u8, host),
-            .port = Cfg.default_port,
+            .port = port,
+            .tls = tls,
+            .insecure = opts.options.insecure,
             .nick = try gpa.dupe(u8, nick),
             .realname = try gpa.dupe(u8, nick),
         };
         have_choice = true;
     } else {
         choice = try Picker.pick(&cfg, gpa);
+        // Non-interactive flags still force the mode on for picker results.
+        if (opts.options.tls) choice.tls = true;
+        if (opts.options.insecure) choice.insecure = true;
+        if (opts.options.port) |port_str| {
+            choice.port = std.fmt.parseInt(u16, port_str, 10) catch {
+                out.print("invalid port '{s}'\n", .{port_str});
+                std.process.exit(1);
+            };
+        }
         have_choice = true;
         // Persist right away so a profile created above survives even if
         // the connection below fails.
         if (cfg_path) |p| Cfg.save(&cfg, gpa, io, p) catch {};
     }
 
-    out.print("connecting to {s}:{d} as {s}…\n", .{ choice.host, choice.port, choice.nick });
+    if (choice.tls) {
+        out.print("connecting to {s}:+{d} (TLS) as {s}…\n", .{ choice.host, choice.port, choice.nick });
+    } else {
+        out.print("connecting to {s}:{d} as {s}…\n", .{ choice.host, choice.port, choice.nick });
+    }
 
-    // Plain TCP only (no TLS), so 6667-style ports.
     format.setIo(io);
-    var client = try IrcClient.init(io, choice.host, choice.port);
+    var client = IrcClient.initOptions(io, choice.host, choice.port, .{
+        .tls = choice.tls,
+        .insecure = choice.insecure,
+    }) catch |err| {
+        reportConnectError(err, &choice);
+        std.process.exit(1);
+    };
     defer client.deinit();
 
     try client.handshake(choice.nick, choice.realname);
@@ -96,12 +141,21 @@ pub fn main(init: std.process.Init) !void {
     try display.setCurrentNick(choice.nick);
     try display.setHistory(&history, choice.host);
 
-    cfg.recordUse(choice.host, choice.port, choice.nick, choice.profile_name) catch {};
+    cfg.recordUseTls(choice.host, choice.port, choice.tls, choice.nick, choice.profile_name) catch {};
     if (cfg_path) |p| Cfg.save(&cfg, gpa, io, p) catch {
         out.print("warning: could not save config to {s}\n", .{p});
     };
 
     try runEventLoop(&client, &display);
+}
+
+fn reportConnectError(err: anyerror, choice: *const Picker.Choice) void {
+    out.print("could not connect to {s}:{d}: {s}\n", .{ choice.host, choice.port, @errorName(err) });
+    if (choice.tls) {
+        out.print("TLS handshake failed. If this server uses a self-signed certificate (e.g. local ergo), retry with --insecure. If it is plaintext-only, retry without --tls.\n", .{});
+    } else {
+        out.print("If the server requires TLS, retry with --tls (default TLS port is {d}, e.g. {s}:+{d}).\n", .{ Cfg.default_tls_port, choice.host, Cfg.default_tls_port });
+    }
 }
 
 test {

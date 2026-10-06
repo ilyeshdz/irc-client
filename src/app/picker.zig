@@ -7,6 +7,8 @@ pub const Choice = struct {
     allocator: std.mem.Allocator,
     host: []const u8,
     port: u16,
+    tls: bool = false,
+    insecure: bool = false,
     nick: []const u8,
     realname: []const u8,
     profile_name: ?[]const u8 = null,
@@ -16,6 +18,13 @@ pub const Choice = struct {
         self.allocator.free(self.nick);
         self.allocator.free(self.realname);
         if (self.profile_name) |n| self.allocator.free(n);
+    }
+
+    pub fn describe(self: *const Choice, buf: []u8) ![]u8 {
+        if (self.tls) {
+            return std.fmt.bufPrint(buf, "{s}:+{d}", .{ self.host, self.port });
+        }
+        return std.fmt.bufPrint(buf, "{s}:{d}", .{ self.host, self.port });
     }
 };
 
@@ -60,7 +69,7 @@ pub fn pick(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
         try entries.append(allocator, .{ .recent = r });
     }
     for (Cfg.common_servers) |s| {
-        if (alreadyListed(entries.items, s.host, s.port)) continue;
+        if (alreadyListed(entries.items, s.host, s.port, s.tls)) continue;
         try entries.append(allocator, .{ .common = s });
     }
 
@@ -70,13 +79,13 @@ pub fn pick(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
             .profile => |p| {
                 const star = if (p.favorite) " ★" else "";
                 const last = if (cfg.last_profile) |l| (if (std.mem.eql(u8, l, p.name)) " [last]" else "") else "";
-                out.print("  {d}) {s} — {s} @ {s}:{d}{s}{s}\n", .{ i + 1, p.name, p.nick, p.host, p.port, star, last });
+                out.print("  {d}) {s} — {s} @ {s}{s}{d}{s}{s}\n", .{ i + 1, p.name, p.nick, p.host, if (p.tls) ":+" else ":", p.port, star, last });
             },
             .recent => |r| {
-                out.print("  {d}) {s}:{d} (recent{s}{s})\n", .{ i + 1, r.host, r.port, if (r.nick.len > 0) ", nick " else "", r.nick });
+                out.print("  {d}) {s}{s}{d} (recent{s}{s})\n", .{ i + 1, r.host, if (r.tls) ":+" else ":", r.port, if (r.nick.len > 0) ", nick " else "", r.nick });
             },
             .common => |s| {
-                out.print("  {d}) {s}:{d}\n", .{ i + 1, s.host, s.port });
+                out.print("  {d}) {s}{s}{d}\n", .{ i + 1, s.host, if (s.tls) ":+" else ":", s.port });
             },
         }
     }
@@ -105,14 +114,14 @@ pub fn pick(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
     return resolveEntry(cfg, allocator, entries.items[n - 1]);
 }
 
-fn alreadyListed(entries: []const Entry, host: []const u8, port: u16) bool {
+fn alreadyListed(entries: []const Entry, host: []const u8, port: u16, tls: bool) bool {
     for (entries) |e| {
         switch (e) {
             .profile => |p| {
-                if (p.port == port and std.mem.eql(u8, p.host, host)) return true;
+                if (p.tls == tls and p.port == port and std.mem.eql(u8, p.host, host)) return true;
             },
             .recent => |r| {
-                if (r.port == port and std.mem.eql(u8, r.host, host)) return true;
+                if (r.tls == tls and r.port == port and std.mem.eql(u8, r.host, host)) return true;
             },
             .common => {},
         }
@@ -127,6 +136,7 @@ fn resolveEntry(cfg: *Cfg.Config, allocator: std.mem.Allocator, entry: Entry) !C
                 .allocator = allocator,
                 .host = try allocator.dupe(u8, p.host),
                 .port = p.port,
+                .tls = p.tls,
                 .nick = try allocator.dupe(u8, p.nick),
                 .realname = try allocator.dupe(u8, p.realname),
                 .profile_name = try allocator.dupe(u8, p.name),
@@ -140,6 +150,7 @@ fn resolveEntry(cfg: *Cfg.Config, allocator: std.mem.Allocator, entry: Entry) !C
                 .allocator = allocator,
                 .host = try allocator.dupe(u8, r.host),
                 .port = r.port,
+                .tls = r.tls,
                 .nick = picked_nick,
                 .realname = realname,
             };
@@ -151,6 +162,7 @@ fn resolveEntry(cfg: *Cfg.Config, allocator: std.mem.Allocator, entry: Entry) !C
                 .allocator = allocator,
                 .host = try allocator.dupe(u8, s.host),
                 .port = s.port,
+                .tls = s.tls,
                 .nick = picked_nick,
                 .realname = realname,
             };
@@ -158,11 +170,47 @@ fn resolveEntry(cfg: *Cfg.Config, allocator: std.mem.Allocator, entry: Entry) !C
     }
 }
 
+/// Split `host[:[+]port]` (e.g. `irc.libera.chat:+6697`) into its parts.
+/// Returns host, optional port, and whether `+` requested TLS.
+pub fn splitHostPort(raw: []const u8) struct { host: []const u8, port: ?u16, tls: ?bool } {
+    const colon = std.mem.lastIndexOfScalar(u8, raw, ':') orelse return .{ .host = raw, .port = null, .tls = null };
+    // An IPv6 literal like `[::1]:6697` keeps the brackets on the host.
+    const host_part = raw[0..colon];
+    const port_part = raw[colon + 1 ..];
+    if (port_part.len == 0) return .{ .host = host_part, .port = null, .tls = null };
+    if (port_part[0] == '+') {
+        const port = std.fmt.parseInt(u16, port_part[1..], 10) catch return .{ .host = raw, .port = null, .tls = null };
+        return .{ .host = host_part, .port = port, .tls = true };
+    }
+    const port = std.fmt.parseInt(u16, port_part, 10) catch return .{ .host = raw, .port = null, .tls = null };
+    return .{ .host = host_part, .port = port, .tls = null };
+}
+
+fn askTls(allocator: std.mem.Allocator, default: bool) !bool {
+    const raw = try ask(allocator, "tls", if (default) "y" else "n");
+    defer allocator.free(raw);
+    const t = std.mem.trim(u8, raw, " \r\n\t");
+    if (t.len == 0) return default;
+    return t[0] == 'y' or t[0] == 'Y';
+}
+
 fn resolveNew(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
-    const host = try ask(allocator, "server", Cfg.common_servers[0].host);
-    const port_str = try ask(allocator, "port", std.fmt.comptimePrint("{d}", .{Cfg.default_port}));
-    defer allocator.free(port_str);
-    const port = std.fmt.parseInt(u16, std.mem.trim(u8, port_str, " "), 10) catch Cfg.default_port;
+    const raw_host = try ask(allocator, "server", Cfg.common_servers[0].host);
+    defer allocator.free(raw_host);
+    const split = splitHostPort(std.mem.trim(u8, raw_host, " \r\n\t"));
+    const host = try allocator.dupe(u8, if (split.host.len > 0) split.host else Cfg.common_servers[0].host);
+    errdefer allocator.free(host);
+    const tls_default = split.tls orelse false;
+    const tls = if (split.tls != null) tls_default else try askTls(allocator, false);
+    const default_port = if (tls) Cfg.default_tls_port else Cfg.default_port;
+    var port: u16 = split.port orelse default_port;
+    if (split.port == null) {
+        var default_buf: [8]u8 = undefined;
+        const default_str = std.fmt.bufPrint(&default_buf, "{d}", .{default_port}) catch std.fmt.comptimePrint("{d}", .{Cfg.default_port});
+        const port_str = try ask(allocator, "port", default_str);
+        defer allocator.free(port_str);
+        port = std.fmt.parseInt(u16, std.mem.trim(u8, port_str, " "), 10) catch default_port;
+    }
     const nick = try ask(allocator, "nick", defaultNick(cfg));
     const realname = try ask(allocator, "realname", nick);
 
@@ -170,6 +218,7 @@ fn resolveNew(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
         .allocator = allocator,
         .host = host,
         .port = port,
+        .tls = tls,
         .nick = nick,
         .realname = realname,
     };
@@ -182,6 +231,7 @@ fn resolveNew(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
             .realname = try allocator.dupe(u8, choice.realname),
             .host = try allocator.dupe(u8, choice.host),
             .port = choice.port,
+            .tls = choice.tls,
             .favorite = false,
         };
         try cfg.upsertProfile(profile);
@@ -226,4 +276,30 @@ fn readLine(allocator: std.mem.Allocator) ![]u8 {
         try buf.append(allocator, one[0]);
     }
     return buf.toOwnedSlice(allocator);
+}
+
+test "host:port and host:+port parsing" {
+    const t = std.testing;
+    const a = splitHostPort("irc.libera.chat");
+    try t.expectEqualStrings("irc.libera.chat", a.host);
+    try t.expect(a.port == null and a.tls == null);
+
+    const b = splitHostPort("irc.libera.chat:6667");
+    try t.expectEqualStrings("irc.libera.chat", b.host);
+    try t.expectEqual(@as(u16, 6667), b.port.?);
+    try t.expect(b.tls == null);
+
+    const c = splitHostPort("irc.libera.chat:+6697");
+    try t.expectEqualStrings("irc.libera.chat", c.host);
+    try t.expectEqual(@as(u16, 6697), c.port.?);
+    try t.expectEqual(true, c.tls.?);
+
+    const d = splitHostPort("127.0.0.1:+6697");
+    try t.expectEqualStrings("127.0.0.1", d.host);
+    try t.expect(d.tls.?);
+
+    // Non-numeric ports are left as a bare hostname.
+    const e = splitHostPort("example.com:notaport");
+    try t.expectEqualStrings("example.com:notaport", e.host);
+    try t.expect(e.port == null);
 }
