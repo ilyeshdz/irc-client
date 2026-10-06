@@ -1,4 +1,5 @@
 const std = @import("std");
+const fileio = @import("io.zig");
 
 pub const Message = struct {
     sender: []const u8,
@@ -87,7 +88,7 @@ pub const History = struct {
     /// Re-reads the history file, replacing everything currently in memory.
     fn reload(self: *History) !void {
         const path = self.path orelse return;
-        const bytes = readFile(self.allocator, self.io, path) catch |err| {
+        const bytes = fileio.readFile(self.allocator, self.io, path) catch |err| {
             if (err == error.FileNotFound) return;
             return err;
         };
@@ -140,17 +141,9 @@ pub const History = struct {
     /// Writes the whole history to the default path (no-op without one).
     pub fn save(self: *const History) !void {
         const path = self.path orelse return;
-        if (std.fs.path.dirname(path)) |dir| {
-            std.Io.Dir.createDirPath(.cwd(), self.io, dir) catch {};
-        }
         const bytes = try self.serialize();
         defer self.allocator.free(bytes);
-        const f = try std.Io.Dir.createFileAbsolute(self.io, path, .{});
-        defer std.Io.File.close(f, self.io);
-        var wbuf: [4096]u8 = undefined;
-        var w = f.writer(self.io, &wbuf);
-        try w.interface.writeAll(bytes);
-        try w.interface.flush();
+        try fileio.writeFile(self.io, path, bytes);
     }
 
     pub fn addServer(self: *History, server_ip: []const u8) !void {
@@ -245,27 +238,7 @@ pub const History = struct {
 };
 
 pub fn historyPath(allocator: std.mem.Allocator) ![]u8 {
-    const home = std.c.getenv("HOME") orelse return error.MissingHome;
-    return std.fmt.allocPrint(allocator, "{s}/.config/irc-client/history", .{std.mem.span(home)});
-}
-
-fn readFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
-    const f = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
-        if (err == error.FileNotFound) return error.FileNotFound;
-        return err;
-    };
-    defer std.Io.File.close(f, io);
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
-    var buf: [4096]u8 = undefined;
-    var reader = f.reader(io, &buf);
-    var tmp: [4096]u8 = undefined;
-    while (true) {
-        const n = try reader.interface.readSliceShort(&tmp);
-        if (n == 0) break;
-        try out.appendSlice(allocator, tmp[0..n]);
-    }
-    return out.toOwnedSlice(allocator);
+    return fileio.appFilePath(allocator, "history");
 }
 
 // --- JSON (de)serialization, tolerant to missing/extra fields ---

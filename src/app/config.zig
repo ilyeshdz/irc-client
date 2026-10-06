@@ -1,4 +1,5 @@
 const std = @import("std");
+const fileio = @import("io.zig");
 
 /// Built-in servers suggested when no profile matches. Maybe change that later
 pub const common_servers = [_]Server{
@@ -111,14 +112,13 @@ pub const Config = struct {
 };
 
 pub fn configPath(allocator: std.mem.Allocator) ![]u8 {
-    const home = std.c.getenv("HOME") orelse return error.MissingHome;
-    return std.fmt.allocPrint(allocator, "{s}/.config/irc-client/config", .{std.mem.span(home)});
+    return fileio.appFilePath(allocator, "config");
 }
 
 pub fn load(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Config {
     var cfg = Config.init(allocator);
     errdefer cfg.deinit();
-    const bytes = readFile(allocator, io, path) catch |err| {
+    const bytes = fileio.readFile(allocator, io, path) catch |err| {
         if (err == error.FileNotFound) return cfg;
         return err;
     };
@@ -128,36 +128,9 @@ pub fn load(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Config 
 }
 
 pub fn save(cfg: *const Config, allocator: std.mem.Allocator, io: std.Io, path: []const u8) !void {
-    if (std.fs.path.dirname(path)) |dir| {
-        std.Io.Dir.createDirPath(.cwd(), io, dir) catch {};
-    }
     const bytes = try serialize(allocator, cfg);
     defer allocator.free(bytes);
-    const f = try std.Io.Dir.createFileAbsolute(io, path, .{});
-    defer std.Io.File.close(f, io);
-    var wbuf: [4096]u8 = undefined;
-    var w = f.writer(io, &wbuf);
-    try w.interface.writeAll(bytes);
-    try w.interface.flush();
-}
-
-fn readFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
-    const f = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
-        if (err == error.FileNotFound) return error.FileNotFound;
-        return err;
-    };
-    defer std.Io.File.close(f, io);
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
-    var buf: [4096]u8 = undefined;
-    var reader = f.reader(io, &buf);
-    var tmp: [4096]u8 = undefined;
-    while (true) {
-        const n = try reader.interface.readSliceShort(&tmp);
-        if (n == 0) break;
-        try out.appendSlice(allocator, tmp[0..n]);
-    }
-    return out.toOwnedSlice(allocator);
+    try fileio.writeFile(io, path, bytes);
 }
 
 // --- JSON (de)serialization, tolerant to missing/extra fields ---
