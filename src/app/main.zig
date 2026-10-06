@@ -43,7 +43,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (opts.options.profile) |name| {
         const p = cfg.findProfile(name) orelse {
-            out.print("unknown profile '{s}'.\n", .{name});
+            out.print("unknown profile '{s}'\n", .{name});
             std.process.exit(1);
         };
         choice = .{
@@ -63,7 +63,7 @@ pub fn main(init: std.process.Init) !void {
         choice = .{
             .allocator = gpa,
             .host = try gpa.dupe(u8, host),
-            .port = 6667,
+            .port = Cfg.default_port,
             .nick = try gpa.dupe(u8, nick),
             .realname = try gpa.dupe(u8, nick),
         };
