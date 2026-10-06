@@ -40,17 +40,6 @@ pub const Profile = struct {
         allocator.free(self.realname);
         allocator.free(self.host);
     }
-
-    fn clone(self: *const Profile, allocator: std.mem.Allocator) !Profile {
-        return .{
-            .name = try allocator.dupe(u8, self.name),
-            .nick = try allocator.dupe(u8, self.nick),
-            .realname = try allocator.dupe(u8, self.realname),
-            .host = try allocator.dupe(u8, self.host),
-            .port = self.port,
-            .favorite = self.favorite,
-        };
-    }
 };
 
 pub const Config = struct {
