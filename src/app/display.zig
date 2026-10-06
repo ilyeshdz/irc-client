@@ -58,7 +58,6 @@ pub const Display = struct {
     allocator: std.mem.Allocator,
     motd_buffer: std.ArrayList(u8),
     collecting_motd: bool,
-    motd_complete: bool,
     in_channel_list: bool,
     list_pending: bool,
     list_count: usize,
@@ -76,7 +75,6 @@ pub const Display = struct {
             .allocator = allocator,
             .motd_buffer = motd_buffer,
             .collecting_motd = false,
-            .motd_complete = false,
             .in_channel_list = false,
             .list_pending = false,
             .list_count = 0,
@@ -221,25 +219,18 @@ pub const Display = struct {
         self.current_nick = try self.allocator.dupe(u8, nick);
     }
 
-    pub fn isMOTDComplete(self: *Display) bool {
-        return self.motd_complete;
-    }
-
     /// Local status line (no server behind it).
-    pub fn info(self: *Display, comptime f: []const u8, args: anytype) void {
-        _ = self;
+    pub fn info(_: *Display, comptime f: []const u8, args: anytype) void {
         line(f, args);
     }
 
     /// Local error line (no server behind it).
-    pub fn err(self: *Display, comptime f: []const u8, args: anytype) void {
-        _ = self;
+    pub fn err(_: *Display, comptime f: []const u8, args: anytype) void {
         errLine(f, args);
     }
 
     /// The TCP connection is back; the server's 001 prints separately.
-    pub fn reconnected(self: *Display) void {
-        _ = self;
+    pub fn reconnected(_: *Display) void {
         statusLine(
             "{s}✓ reconnected{s}\n",
             .{ fmt.green, fmt.reset },
@@ -251,7 +242,6 @@ pub const Display = struct {
     /// Drop MOTD/LIST state owned by the connection that just died.
     pub fn resetConnectionState(self: *Display) void {
         self.collecting_motd = false;
-        self.motd_complete = false;
         self.motd_buffer.clearRetainingCapacity();
         self.in_channel_list = false;
         self.list_pending = false;
@@ -363,7 +353,6 @@ pub const Display = struct {
 
     fn handleMOTDStart(self: *Display, msg: Message) !void {
         self.collecting_motd = true;
-        self.motd_complete = false;
         self.motd_buffer.clearRetainingCapacity();
         if (msg.trailing.len > 0) {
             try self.motd_buffer.appendSlice(self.allocator, msg.trailing);
@@ -381,7 +370,6 @@ pub const Display = struct {
     fn handleMOTDEnd(self: *Display, msg: Message) !void {
         if (!self.collecting_motd) return;
         self.collecting_motd = false;
-        self.motd_complete = true;
         if (msg.trailing.len > 0) {
             try self.motd_buffer.appendSlice(self.allocator, msg.trailing);
             try self.motd_buffer.appendSlice(self.allocator, "\n");
@@ -756,8 +744,7 @@ pub const Display = struct {
         }
     }
 
-    fn handleTopic(self: *Display, msg: Message) void {
-        _ = self;
+    fn handleTopic(_: *Display, msg: Message) void {
         const prefix = msg.prefix orelse return;
         const channel = msg.params[0];
         if (channel.len == 0) return;
@@ -1103,7 +1090,6 @@ test "resetConnectionState clears what a dropped connection left behind" {
     d.resetConnectionState();
 
     try t.expect(!d.collecting_motd);
-    try t.expect(!d.motd_complete);
     try t.expectEqual(@as(usize, 0), d.motd_buffer.items.len);
     try t.expect(!d.list_pending);
     try t.expect(!d.list_refused);
