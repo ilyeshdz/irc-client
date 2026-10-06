@@ -639,7 +639,7 @@ pub const Display = struct {
         }
     }
 
-    fn handleInvite(self: *Display, msg: Message) void {
+    fn handleInvite(_: *Display, msg: Message) void {
         const prefix = msg.prefix orelse return;
         const nick = nickOnly(prefix);
         // INVITE params: [me, channel] on most servers (target first on some).
@@ -647,7 +647,6 @@ pub const Display = struct {
         if (channel.len == 0) return;
         var nb: [256]u8 = undefined;
         var chb: [256]u8 = undefined;
-        _ = self;
         event("{s} invited you to {s} — /join {s} to accept\n", .{
             fmt.paintNick(nick, &nb),
             fmt.paintChannel(channel, &chb),
