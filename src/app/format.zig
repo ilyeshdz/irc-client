@@ -94,18 +94,19 @@ pub fn timestampFromEpoch(epoch_secs: i64, buf: *[16]u8) []const u8 {
     return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ h, m, s }) catch "??:??:??";
 }
 
-pub fn dimTimestamp(buf: *[16]u8, styled: *[32]u8) []const u8 {
-    const ts = timestamp(buf);
+fn dimTs(ts: []const u8, styled: *[32]u8) []const u8 {
     if (!isEnabled()) return ts;
     return std.fmt.bufPrint(styled, "{s}{s}{s}", .{ dim, ts, reset }) catch ts;
+}
+
+pub fn dimTimestamp(buf: *[16]u8, styled: *[32]u8) []const u8 {
+    return dimTs(timestamp(buf), styled);
 }
 
 /// Dim-styled "HH:MM:SS" for an arbitrary epoch second — used when replaying
 /// history, where each line must keep the time it was sent at.
 pub fn dimTimestampAt(epoch_secs: i64, buf: *[16]u8, styled: *[32]u8) []const u8 {
-    const ts = timestampFromEpoch(epoch_secs, buf);
-    if (!isEnabled()) return ts;
-    return std.fmt.bufPrint(styled, "{s}{s}{s}", .{ dim, ts, reset }) catch ts;
+    return dimTs(timestampFromEpoch(epoch_secs, buf), styled);
 }
 
 // Grid helpers shared by the /help and --help menus so both line up the
