@@ -3,22 +3,25 @@ const fileio = @import("io.zig");
 
 /// Built-in servers suggested when no profile matches. Maybe change that later
 pub const common_servers = [_]Server{
-    .{ .host = "irc.ircnet.com", .port = 6667 },
-    .{ .host = "irc.libera.chat", .port = 6667 },
-    .{ .host = "irc.oftc.net", .port = 6667 },
-    .{ .host = "127.0.0.1", .port = 6667 },
+    .{ .host = "irc.ircnet.com", .port = default_port },
+    .{ .host = "irc.libera.chat", .port = default_port },
+    .{ .host = "irc.oftc.net", .port = default_port },
+    .{ .host = "127.0.0.1", .port = default_port },
 };
 
 pub const max_recent: usize = 5;
 
+/// Plain TCP fallback when no port is configured anywhere.
+pub const default_port: u16 = 6667;
+
 pub const Server = struct {
     host: []const u8,
-    port: u16 = 6667,
+    port: u16 = default_port,
 };
 
 pub const RecentEntry = struct {
     host: []const u8,
-    port: u16 = 6667,
+    port: u16 = default_port,
     nick: []const u8 = "",
 
     fn deinit(self: *RecentEntry, allocator: std.mem.Allocator) void {
@@ -32,7 +35,7 @@ pub const Profile = struct {
     nick: []const u8,
     realname: []const u8,
     host: []const u8,
-    port: u16 = 6667,
+    port: u16 = default_port,
     favorite: bool = false,
 
     fn deinit(self: *Profile, allocator: std.mem.Allocator) void {
@@ -144,10 +147,10 @@ fn getStr(obj: std.json.ObjectMap, key: []const u8, default: []const u8) []const
 }
 
 fn getPort(obj: std.json.ObjectMap) u16 {
-    const v = obj.get("port") orelse return 6667;
+    const v = obj.get("port") orelse return default_port;
     return switch (v) {
-        .integer => |n| std.math.cast(u16, n) orelse 6667,
-        else => 6667,
+        .integer => |n| std.math.cast(u16, n) orelse default_port,
+        else => default_port,
     };
 }
 

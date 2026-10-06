@@ -160,9 +160,9 @@ fn resolveEntry(cfg: *Cfg.Config, allocator: std.mem.Allocator, entry: Entry) !C
 
 fn resolveNew(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
     const host = try ask(allocator, "server", Cfg.common_servers[0].host);
-    const port_str = try ask(allocator, "port", "6667");
+    const port_str = try ask(allocator, "port", std.fmt.comptimePrint("{d}", .{Cfg.default_port}));
     defer allocator.free(port_str);
-    const port = std.fmt.parseInt(u16, std.mem.trim(u8, port_str, " "), 10) catch 6667;
+    const port = std.fmt.parseInt(u16, std.mem.trim(u8, port_str, " "), 10) catch Cfg.default_port;
     const nick = try ask(allocator, "nick", defaultNick(cfg));
     const realname = try ask(allocator, "realname", nick);
 
