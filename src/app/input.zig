@@ -239,7 +239,7 @@ pub fn executeCommand(client: *IrcClient, display: *Display, cmd: Command) !Outc
             display.echoSent(target, m.text, true);
         },
         .Unknown => |unknown_cmd| {
-            out.print("Unknown command: /{s}. Type /help for help.\n", .{unknown_cmd});
+            out.print("unknown command: /{s}. Type /help for help.\n", .{unknown_cmd});
         },
     }
     return .keep;
