@@ -58,8 +58,16 @@ pub fn generateHelpText(comptime o: type) []const u8 {
     return text;
 }
 
-// Short aliases, keyed by field name of `Options`.
-const shorts = .{ .help = 'h', .version = 'V', .profile = 'p' };
+// Short aliases live only in `TAGS` above: derive them from there so adding
+// a flag never requires editing a second table.
+fn shortFor(comptime T: type, comptime name: []const u8) ?u8 {
+    if (!@hasDecl(T, "TAGS")) return null;
+    const tags = T.TAGS;
+    if (!@hasField(@TypeOf(tags), name)) return null;
+    const tag = @field(tags, name);
+    if (!@hasField(@TypeOf(tag), "short")) return null;
+    return @field(tag, "short")[0];
+}
 
 pub const helpText = generateHelpText(Options);
 
@@ -111,7 +119,7 @@ pub fn parse(comptime T: type, gpa: std.mem.Allocator, args: []const [:0]const u
 
             var matched = false;
             inline for (std.meta.fields(T)) |f| {
-                const short: ?u8 = if (@hasField(@TypeOf(shorts), f.name)) @field(shorts, f.name) else null;
+                const short: ?u8 = shortFor(T, f.name);
                 const hit = if (is_long)
                     std.mem.eql(u8, f.name, name)
                 else
