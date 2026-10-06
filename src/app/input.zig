@@ -265,7 +265,7 @@ const help_rows = [_]HelpRow{
     .{ .cmd = "/whois", .args = "<nick>", .desc = "Show info about a user", .alias = "(alias: /w)" },
     .{ .cmd = "/who", .args = "[channel]", .desc = "List users with details" },
     .{ .cmd = "/mode", .args = "[target] [modes]", .desc = "Show or change modes" },
-    .{ .cmd = "/kick", .args = "<chan> <nick> [r]", .desc = "Kick a user", .alias = "(alias: /k)" },
+    .{ .cmd = "/kick", .args = "<chan> <nick> [reason]", .desc = "Kick a user", .alias = "(alias: /k)" },
     .{ .cmd = "/invite", .args = "<nick> [chan]", .desc = "Invite a user", .alias = "(alias: /i)" },
     .{ .cmd = "/away", .args = "[message]", .desc = "Set or clear away status" },
     .{ .cmd = "/list", .args = "", .desc = "List channels", .alias = "(alias: /l)" },
