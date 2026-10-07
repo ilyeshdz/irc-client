@@ -20,7 +20,7 @@ pub fn executeCommand(client: *IrcClient, display: *Display, cmd: Command) !Outc
         .Quit => |reason| {
             // A failed QUIT still ends the session: it must not turn into a
             // reconnect the user just asked to avoid.
-            client.quit(reason) catch {};
+            client.quit(reason) catch |err| std.log.debug("quit notice failed on the way out: {s}", .{@errorName(err)});
             return .quit;
         },
         .Reconnect => return .reconnect,
@@ -133,7 +133,7 @@ fn drainServer(client: *IrcClient, display: *Display, ibox: *InputBox, buf: *[51
             // `nick_` at once so we don't sit unregistered in backoff.
             if (std.mem.eql(u8, m.command, "433")) {
                 const alt = client.useAlternateNick() catch continue;
-                display.setCurrentNick(alt) catch {};
+                display.setCurrentNick(alt) catch |err| std.log.warn("433 fallback sent, but display nick not updated: {s}", .{@errorName(err)});
             }
         }
     }
@@ -256,7 +256,7 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
                         },
                         .interrupt => {
                             ibox.hide();
-                            client.quit(null) catch {};
+                            client.quit(null) catch |err| std.log.debug("quit notice failed on interrupt: {s}", .{@errorName(err)});
                             return;
                         },
                         .eof => return,

@@ -109,7 +109,7 @@ pub fn main(init: std.process.Init) !void {
         have_choice = true;
         // Persist right away so a profile created above survives even if
         // the connection below fails.
-        if (cfg_path) |p| Cfg.save(&cfg, gpa, io, p) catch {};
+        if (cfg_path) |p| Cfg.save(&cfg, gpa, io, p) catch |err| std.log.warn("could not save config to {s}: {s}", .{ p, @errorName(err) });
     }
 
     if (choice.tls) {
@@ -141,7 +141,7 @@ pub fn main(init: std.process.Init) !void {
     try display.setCurrentNick(choice.nick);
     try display.setHistory(&history, choice.host);
 
-    cfg.recordUseTls(choice.host, choice.port, choice.tls, choice.nick, choice.profile_name) catch {};
+    cfg.recordUseTls(choice.host, choice.port, choice.tls, choice.nick, choice.profile_name) catch |err| std.log.warn("could not record server in history: {s}", .{@errorName(err)});
     if (cfg_path) |p| Cfg.save(&cfg, gpa, io, p) catch {
         out.print("warning: could not save config to {s}\n", .{p});
     };

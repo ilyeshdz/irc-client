@@ -23,7 +23,7 @@ pub const TlsState = struct {
 
     pub fn destroy(self: *TlsState) void {
         // Best effort close_notify; the socket is going away regardless.
-        self.tls_conn.close() catch {};
+        self.tls_conn.close() catch |err| std.log.debug("tls close_notify failed during teardown: {s}", .{@errorName(err)});
         const alloc = self.allocator;
         if (self.have_root_ca) self.root_ca.deinit(alloc);
         alloc.free(self.sock_read_buf);
@@ -96,7 +96,7 @@ fn startTls(self: *IrcClient) !void {
     };
     // The handshake wrote through the socket writer; the library
     // flushes per record, but make sure the tail reached the wire.
-    state.sock_writer.interface.flush() catch {};
+    state.sock_writer.interface.flush() catch |err| std.log.warn("tls handshake tail flush failed: {s}", .{@errorName(err)});
     state.tls_reader = state.tls_conn.reader(state.tls_read_buf);
     self.tls_state = state;
 }

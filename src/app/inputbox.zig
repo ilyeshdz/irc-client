@@ -37,7 +37,7 @@ pub const InputBox = struct {
         self.raw = false;
         // Clear the prompt line, then restore cooked mode.
         out.print("\r\x1b[K", .{});
-        std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.orig) catch {};
+        std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.orig) catch |err| std.log.debug("could not restore terminal mode: {s}", .{@errorName(err)});
     }
 
     pub const Key = union(enum) {

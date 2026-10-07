@@ -14,7 +14,7 @@ pub fn handleJoin(self: *Display, msg: Message) !void {
         if (std.mem.eql(u8, nick, my_nick)) {
             var chb: [256]u8 = undefined;
             util.event("You joined {s}\n", .{fmt.paintChannel(channel, &chb)});
-            self.setCurrentChannel(channel) catch {};
+            self.setCurrentChannel(channel) catch |err| std.log.warn("could not track joined channel {s}: {s}", .{ channel, @errorName(err) });
             util.line("now talking in {s} — type a message, /help for commands\n", .{fmt.paintChannel(channel, &chb)});
             self.ensureReplayed(channel);
         } else {
@@ -36,7 +36,7 @@ pub fn handlePart(self: *Display, msg: Message) !void {
             var chb: [256]u8 = undefined;
             util.event("You left {s}\n", .{fmt.paintChannel(channel, &chb)});
             if (self.current_channel) |current| {
-                if (std.mem.eql(u8, current, channel)) self.setCurrentChannel(null) catch {};
+                if (std.mem.eql(u8, current, channel)) self.setCurrentChannel(null) catch |err| std.log.warn("could not clear current channel {s}: {s}", .{ channel, @errorName(err) });
             }
         } else if (util.reasonOf(msg, 1).len > 0) {
             var nb: [256]u8 = undefined;
@@ -88,7 +88,7 @@ pub fn handleKick(self: *Display, msg: Message) !void {
     if (self.current_nick) |my_nick| {
         if (std.mem.eql(u8, target, my_nick)) {
             if (self.current_channel) |current| {
-                if (std.mem.eql(u8, current, channel)) self.setCurrentChannel(null) catch {};
+                if (std.mem.eql(u8, current, channel)) self.setCurrentChannel(null) catch |err| std.log.warn("could not clear current channel {s}: {s}", .{ channel, @errorName(err) });
             }
         }
     }
@@ -140,7 +140,7 @@ pub fn handleNick(self: *Display, msg: Message) !void {
         if (std.mem.eql(u8, old_nick, my_nick)) {
             var nb: [256]u8 = undefined;
             util.event("You are now known as {s}\n", .{fmt.paintNick(new_nick, &nb)});
-            self.setCurrentNick(new_nick) catch {};
+            self.setCurrentNick(new_nick) catch |err| std.log.warn("could not track nick change to {s}: {s}", .{ new_nick, @errorName(err) });
         } else {
             var ob: [256]u8 = undefined;
             var nb: [256]u8 = undefined;

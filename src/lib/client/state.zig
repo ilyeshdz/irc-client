@@ -61,7 +61,9 @@ fn isSelfNick(self: *const IrcClient, nick_or_prefix: []const u8) bool {
 fn leaveChannel(self: *IrcClient, channel: []const u8) void {
     forgetChannel(self, channel);
     if (getCurrentChannel(self)) |current| {
-        if (std.mem.eql(u8, current, channel)) setCurrentChannel(self, null) catch {};
+        if (std.mem.eql(u8, current, channel)) setCurrentChannel(self, null) catch |err| {
+            std.log.warn("could not clear current channel after leaving {s}: {s}", .{ channel, @errorName(err) });
+        };
     }
 }
 

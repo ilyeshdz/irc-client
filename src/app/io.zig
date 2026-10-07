@@ -31,7 +31,7 @@ pub fn readFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u
 /// Write bytes to path, creating parent directories as needed.
 pub fn writeFile(io: std.Io, path: []const u8, bytes: []const u8) !void {
     if (std.fs.path.dirname(path)) |dir| {
-        std.Io.Dir.createDirPath(.cwd(), io, dir) catch {};
+        std.Io.Dir.createDirPath(.cwd(), io, dir) catch |err| std.log.debug("could not create parent dir {s}: {s}", .{ dir, @errorName(err) });
     }
     const f = try std.Io.Dir.createFileAbsolute(io, path, .{});
     defer std.Io.File.close(f, io);
