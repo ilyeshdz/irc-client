@@ -160,11 +160,14 @@ fn reportConnectError(err: anyerror, choice: *const Picker.Choice) void {
 
 test {
     _ = @import("cli.zig");
+    _ = @import("command.zig");
     _ = @import("config.zig");
     _ = @import("display.zig");
+    _ = @import("help.zig");
     _ = @import("history.zig");
     _ = @import("format.zig");
     _ = @import("input.zig");
     _ = @import("inputbox.zig");
     _ = @import("picker.zig");
+    _ = @import("queue.zig");
 }
