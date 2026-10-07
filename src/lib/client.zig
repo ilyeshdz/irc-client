@@ -1,30 +1,34 @@
 const std = @import("std");
 const Message = @import("message.zig").Message;
 const net = std.Io.net;
-const tls = std.crypto.tls;
-const Certificate = std.crypto.Certificate;
+const tls = @import("tls");
 
 const MAX_MESSAGE_LENGTH = 512;
 
+// TLS via ianic/tls.zig (rather than std.crypto.tls): it answers server
+// CertificateRequests with an empty Certificate when no client auth is
+// configured, which Libera/OFTC require. std's client aborts the handshake
+// instead (upstream ziglang/zig#17446).
 const TlsState = struct {
     allocator: std.mem.Allocator,
     sock_reader: net.Stream.Reader,
     sock_writer: net.Stream.Writer,
     sock_read_buf: []u8,
     sock_write_buf: []u8,
+    tls_conn: tls.Connection,
+    tls_reader: tls.Connection.Reader,
     tls_read_buf: []u8,
-    tls_write_buf: []u8,
-    tls_client: tls.Client,
+    root_ca: std.crypto.Certificate.Bundle,
+    have_root_ca: bool = false,
 
     fn destroy(self: *TlsState) void {
         // Best effort close_notify; the socket is going away regardless.
-        self.tls_client.end() catch {};
-        self.sock_writer.interface.flush() catch {};
+        self.tls_conn.close() catch {};
         const alloc = self.allocator;
+        if (self.have_root_ca) self.root_ca.deinit(alloc);
         alloc.free(self.sock_read_buf);
         alloc.free(self.sock_write_buf);
         alloc.free(self.tls_read_buf);
-        alloc.free(self.tls_write_buf);
         alloc.destroy(self);
     }
 };
@@ -138,71 +142,54 @@ pub const IrcClient = struct {
     }
 
     /// Run a TLS handshake over the already-connected TCP stream.
-    /// The CA bundle is only needed for the handshake, so it lives on the
-    /// stack here; the encrypted/plaintext buffers stay in `tls_state`.
+    /// The root bundle lives in `tls_state` for the life of the connection.
     fn startTls(self: *IrcClient) !void {
         std.debug.assert(self.tls_state == null);
         const alloc = self.allocator;
         const state = try alloc.create(TlsState);
         errdefer alloc.destroy(state);
         state.allocator = alloc;
-        state.sock_read_buf = try alloc.alloc(u8, tls.Client.min_buffer_len);
+        state.have_root_ca = false;
+        // ianic asserts these sizes: full ciphertext records both ways.
+        state.sock_read_buf = try alloc.alloc(u8, tls.input_buffer_len);
         errdefer alloc.free(state.sock_read_buf);
-        state.sock_write_buf = try alloc.alloc(u8, tls.Client.min_buffer_len);
+        state.sock_write_buf = try alloc.alloc(u8, tls.output_buffer_len);
         errdefer alloc.free(state.sock_write_buf);
-        state.tls_read_buf = try alloc.alloc(u8, tls.Client.min_buffer_len);
+        // Sized for a whole decrypted record so overflow never strands
+        // complete lines where hasCompleteLine cannot see them.
+        state.tls_read_buf = try alloc.alloc(u8, tls.input_buffer_len);
         errdefer alloc.free(state.tls_read_buf);
-        state.tls_write_buf = try alloc.alloc(u8, tls.Client.min_buffer_len);
-        errdefer alloc.free(state.tls_write_buf);
 
         state.sock_reader = self.stream.reader(self.io, state.sock_read_buf);
         state.sock_writer = self.stream.writer(self.io, state.sock_write_buf);
 
-        var entropy: [tls.Client.Options.entropy_len]u8 = undefined;
-        self.io.random(&entropy);
-        const realtime = std.Io.Clock.real.now(self.io);
-
-        if (self.insecure) {
-            state.tls_client = try tls.Client.init(
-                &state.sock_reader.interface,
-                &state.sock_writer.interface,
-                .{
-                    .host = .no_verification,
-                    .ca = .no_verification,
-                    .read_buffer = state.tls_read_buf,
-                    .write_buffer = state.tls_write_buf,
-                    .entropy = &entropy,
-                    .realtime_now = realtime,
-                },
-            );
+        if (!self.insecure) {
+            state.root_ca = try tls.config.cert.fromSystem(alloc, self.io);
+            state.have_root_ca = true;
         } else {
-            var bundle: Certificate.Bundle = .empty;
-            defer bundle.deinit(alloc);
-            try bundle.rescan(alloc, self.io, realtime);
-            var lock: std.Io.RwLock = .init;
-            state.tls_client = try tls.Client.init(
-                &state.sock_reader.interface,
-                &state.sock_writer.interface,
-                .{
-                    .host = .{ .explicit = self.host },
-                    .ca = .{ .bundle = .{
-                        .gpa = alloc,
-                        .io = self.io,
-                        .lock = &lock,
-                        .bundle = &bundle,
-                    } },
-                    .read_buffer = state.tls_read_buf,
-                    .write_buffer = state.tls_write_buf,
-                    .entropy = &entropy,
-                    .realtime_now = realtime,
-                },
-            );
-            // Flush any handshake tail the TLS client left buffered.
-            state.sock_writer.interface.flush() catch {};
+            state.root_ca = .empty;
         }
-        // The handshake wrote through the socket writer; make sure the
-        // bytes actually reached the wire before we return.
+        errdefer if (state.have_root_ca) state.root_ca.deinit(alloc);
+
+        const rng_impl: std.Random.IoSource = .{ .io = self.io };
+        state.tls_conn = tls.client(
+            &state.sock_reader.interface,
+            &state.sock_writer.interface,
+            .{
+                .host = self.host,
+                .root_ca = state.root_ca,
+                .now = std.Io.Clock.real.now(self.io),
+                .rng = rng_impl.interface(),
+                .insecure_skip_verify = self.insecure,
+            },
+        ) catch |err| {
+            // The errdefers above release the bundle, buffers and state.
+            return err;
+        };
+        // The handshake wrote through the socket writer; the library
+        // flushes per record, but make sure the tail reached the wire.
         state.sock_writer.interface.flush() catch {};
+        state.tls_reader = state.tls_conn.reader(state.tls_read_buf);
         self.tls_state = state;
     }
 
@@ -268,16 +255,8 @@ pub const IrcClient = struct {
         message.format(&fixed) catch return error.MessageTooLong;
 
         if (self.tls_state) |state| {
-            state.tls_client.writer.writeAll(fixed.buffered()) catch |err| {
+            state.tls_conn.writeAll(fixed.buffered()) catch |err| {
                 self.closeStream(); // the socket died, not the message
-                return err;
-            };
-            state.tls_client.writer.flush() catch |err| {
-                self.closeStream();
-                return err;
-            };
-            state.sock_writer.interface.flush() catch |err| {
-                self.closeStream();
                 return err;
             };
             return;
@@ -509,7 +488,7 @@ pub const IrcClient = struct {
     }
 
     fn plaintextReader(self: *IrcClient) *std.Io.Reader {
-        if (self.tls_state) |state| return &state.tls_client.reader;
+        if (self.tls_state) |state| return &state.tls_reader.interface;
         return &self.ensurePlainReader().interface;
     }
 

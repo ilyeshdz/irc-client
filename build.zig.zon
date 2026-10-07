@@ -1,0 +1,12 @@
+.{
+    .name = .irc_client,
+    .version = "0.16.0",
+    .dependencies = .{
+        .tls = .{
+            .url = "git+https://github.com/ianic/tls.zig#ba3008f7d6750b528a4641e311816ad65c3ca426",
+            .hash = "tls-0.1.0-ER2e0hTPBgCpbhJ_kDs2c-zXotaMIBpaP1oUvrQKSTF3",
+        },
+    },
+    .paths = .{""},
+    .fingerprint = 0xed52376f64166daf,
+}
