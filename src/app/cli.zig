@@ -6,11 +6,17 @@ pub const Options = struct {
     help: bool = false,
     version: bool = false,
     profile: ?[]const u8 = null,
+    tls: bool = false,
+    insecure: bool = false,
+    port: ?[]const u8 = null,
 
     pub const TAGS = .{
         .help = .{ .desc = "Display this help message and exit", .short = "h" },
         .version = .{ .desc = "Display version information and exit", .short = "V" },
         .profile = .{ .desc = "Connect using a saved profile configuration", .short = "p" },
+        .tls = .{ .desc = "Use TLS for the connection", .short = "t" },
+        .insecure = .{ .desc = "Skip TLS cert verification", .short = "k" },
+        .port = .{ .desc = "Server port override", .short = "P" },
     };
 };
 

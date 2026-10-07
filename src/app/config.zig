@@ -14,14 +14,19 @@ pub const max_recent: usize = 5;
 /// Plain TCP fallback when no port is configured anywhere.
 pub const default_port: u16 = 6667;
 
+/// Default for TLS connections (e.g. irc.libera.chat:6697).
+pub const default_tls_port: u16 = 6697;
+
 pub const Server = struct {
     host: []const u8,
     port: u16 = default_port,
+    tls: bool = false,
 };
 
 pub const RecentEntry = struct {
     host: []const u8,
     port: u16 = default_port,
+    tls: bool = false,
     nick: []const u8 = "",
 
     fn deinit(self: *RecentEntry, allocator: std.mem.Allocator) void {
@@ -36,6 +41,7 @@ pub const Profile = struct {
     realname: []const u8,
     host: []const u8,
     port: u16 = default_port,
+    tls: bool = false,
     favorite: bool = false,
 
     fn deinit(self: *Profile, allocator: std.mem.Allocator) void {
@@ -88,11 +94,17 @@ pub const Config = struct {
     /// Record a connection in the recent list (most recent first, capped).
     /// Also remembers the profile name used, if any.
     pub fn recordUse(self: *Config, host: []const u8, port: u16, nick: []const u8, profile_name: ?[]const u8) !void {
+        return self.recordUseTls(host, port, false, nick, profile_name);
+    }
+
+    /// Same as `recordUse`, but remembers whether the connection used TLS.
+    pub fn recordUseTls(self: *Config, host: []const u8, port: u16, tls: bool, nick: []const u8, profile_name: ?[]const u8) !void {
         var kept: std.ArrayList(RecentEntry) = .empty;
         defer kept.deinit(self.allocator);
         try kept.append(self.allocator, .{
             .host = try self.allocator.dupe(u8, host),
             .port = port,
+            .tls = tls,
             .nick = try self.allocator.dupe(u8, nick),
         });
         for (self.recent.items) |*r| {
@@ -100,7 +112,7 @@ pub const Config = struct {
                 r.deinit(self.allocator);
                 continue;
             }
-            if (std.mem.eql(u8, r.host, host) and r.port == port) {
+            if (std.mem.eql(u8, r.host, host) and r.port == port and r.tls == tls) {
                 r.deinit(self.allocator);
                 continue;
             }
@@ -147,10 +159,15 @@ fn getStr(obj: std.json.ObjectMap, key: []const u8, default: []const u8) []const
 }
 
 fn getPort(obj: std.json.ObjectMap) u16 {
-    const v = obj.get("port") orelse return default_port;
+    return getPortFor(obj, false);
+}
+
+fn getPortFor(obj: std.json.ObjectMap, tls: bool) u16 {
+    const fallback = if (tls) default_tls_port else default_port;
+    const v = obj.get("port") orelse return fallback;
     return switch (v) {
-        .integer => |n| std.math.cast(u16, n) orelse default_port,
-        else => default_port,
+        .integer => |n| std.math.cast(u16, n) orelse fallback,
+        else => fallback,
     };
 }
 
@@ -181,12 +198,14 @@ pub fn parseInto(cfg: *Config, bytes: []const u8) !void {
             for (pv.array.items) |item| {
                 if (item != .object) continue;
                 const o = item.object;
+                const tls = getBool(o, "tls");
                 try cfg.profiles.append(allocator, .{
                     .name = try allocator.dupe(u8, getStr(o, "name", "default")),
                     .nick = try allocator.dupe(u8, getStr(o, "nick", "guest")),
                     .realname = try allocator.dupe(u8, getStr(o, "realname", getStr(o, "nick", "guest"))),
                     .host = try allocator.dupe(u8, getStr(o, "host", "irc.ircnet.com")),
-                    .port = getPort(o),
+                    .port = getPortFor(o, tls),
+                    .tls = tls,
                     .favorite = getBool(o, "favorite"),
                 });
             }
@@ -198,9 +217,11 @@ pub fn parseInto(cfg: *Config, bytes: []const u8) !void {
                 if (item != .object) continue;
                 if (cfg.recent.items.len >= max_recent) break;
                 const o = item.object;
+                const tls = getBool(o, "tls");
                 try cfg.recent.append(allocator, .{
                     .host = try allocator.dupe(u8, getStr(o, "host", "")),
-                    .port = getPort(o),
+                    .port = getPortFor(o, tls),
+                    .tls = tls,
                     .nick = try allocator.dupe(u8, getStr(o, "nick", "")),
                 });
             }
@@ -220,12 +241,14 @@ const SerProfile = struct {
     realname: []const u8,
     host: []const u8,
     port: u16,
+    tls: bool,
     favorite: bool,
 };
 
 const SerRecent = struct {
     host: []const u8,
     port: u16,
+    tls: bool,
     nick: []const u8,
 };
 
@@ -245,13 +268,14 @@ pub fn serialize(allocator: std.mem.Allocator, cfg: *const Config) ![]u8 {
             .realname = p.realname,
             .host = p.host,
             .port = p.port,
+            .tls = p.tls,
             .favorite = p.favorite,
         };
     }
     const recent = try allocator.alloc(SerRecent, cfg.recent.items.len);
     defer allocator.free(recent);
     for (cfg.recent.items, 0..) |*r, i| {
-        recent[i] = .{ .host = r.host, .port = r.port, .nick = r.nick };
+        recent[i] = .{ .host = r.host, .port = r.port, .tls = r.tls, .nick = r.nick };
     }
     const doc = SerConfig{ .profiles = profiles, .recent = recent, .last_profile = cfg.last_profile };
     return std.json.Stringify.valueAlloc(allocator, doc, .{ .whitespace = .indent_2 });
@@ -293,6 +317,62 @@ test "missing file fields fall back to defaults" {
     try t.expectEqualStrings("guest", cfg.profiles.items[0].nick);
     try t.expectEqualStrings("irc.ircnet.com", cfg.profiles.items[0].host);
     try t.expectEqual(@as(u16, 6667), cfg.profiles.items[0].port);
+    try t.expect(!cfg.profiles.items[0].tls);
+}
+
+test "tls setting survives save/load and old configs stay plaintext" {
+    const t = std.testing;
+    var cfg = Config.init(t.allocator);
+    defer cfg.deinit();
+    try cfg.profiles.append(t.allocator, .{
+        .name = try t.allocator.dupe(u8, "secure"),
+        .nick = try t.allocator.dupe(u8, "hdz"),
+        .realname = try t.allocator.dupe(u8, "ilyes"),
+        .host = try t.allocator.dupe(u8, "irc.libera.chat"),
+        .port = 6697,
+        .tls = true,
+        .favorite = false,
+    });
+    try cfg.recordUseTls("irc.libera.chat", 6697, true, "hdz", "secure");
+
+    const bytes = try serialize(t.allocator, &cfg);
+    defer t.allocator.free(bytes);
+    try t.expect(std.mem.indexOf(u8, bytes, "\"tls\"") != null);
+
+    var cfg2 = Config.init(t.allocator);
+    defer cfg2.deinit();
+    try parseInto(&cfg2, bytes);
+    try t.expect(cfg2.profiles.items[0].tls);
+    try t.expectEqual(@as(u16, 6697), cfg2.profiles.items[0].port);
+    try t.expect(cfg2.recent.items[0].tls);
+    try t.expectEqual(@as(u16, 6697), cfg2.recent.items[0].port);
+
+    // Old JSON without a tls field stays plaintext on 6667.
+    var cfg3 = Config.init(t.allocator);
+    defer cfg3.deinit();
+    try parseInto(&cfg3, "{\"profiles\": [{\"name\": \"x\", \"host\": \"h\", \"port\": 6667}]}");
+    try t.expect(!cfg3.profiles.items[0].tls);
+
+    // A tls entry without an explicit port falls back to 6697.
+    var cfg4 = Config.init(t.allocator);
+    defer cfg4.deinit();
+    try parseInto(&cfg4, "{\"profiles\": [{\"name\": \"x\", \"host\": \"h\", \"tls\": true}]}");
+    try t.expect(cfg4.profiles.items[0].tls);
+    try t.expectEqual(default_tls_port, cfg4.profiles.items[0].port);
+}
+
+test "recent list distinguishes tls from plaintext" {
+    const t = std.testing;
+    var cfg = Config.init(t.allocator);
+    defer cfg.deinit();
+    try cfg.recordUseTls("irc.libera.chat", 6697, true, "a", null);
+    try cfg.recordUseTls("irc.libera.chat", 6667, false, "a", null);
+    try t.expectEqual(@as(usize, 2), cfg.recent.items.len);
+    try t.expect(!cfg.recent.items[0].tls);
+    try t.expect(cfg.recent.items[1].tls);
+    // Same host/port/tls dedupes back to one entry.
+    try cfg.recordUseTls("irc.libera.chat", 6667, false, "a", null);
+    try t.expectEqual(@as(usize, 2), cfg.recent.items.len);
 }
 
 test "recent list caps and dedupes" {

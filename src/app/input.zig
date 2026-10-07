@@ -483,7 +483,11 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
                     planRetry(&retry_at, &delay_ms, now, display);
                 }
             } else {
-                display.info("reconnecting to {s}:{d}…\n", .{ client.host, client.port });
+                if (client.isTls()) {
+                    display.info("reconnecting to {s}:+{d} (TLS)…\n", .{ client.host, client.port });
+                } else {
+                    display.info("reconnecting to {s}:{d}…\n", .{ client.host, client.port });
+                }
                 delay_ms = first_retry_ms;
                 retry_at = now;
             }

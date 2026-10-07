@@ -9,12 +9,20 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version);
 
+    const tls_dep = b.dependency("tls", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const lib_module = b.createModule(.{
         .root_source_file = b.path("src/lib/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
         .strip = strip,
+        .imports = &.{
+            .{ .name = "tls", .module = tls_dep.module("tls") },
+        },
     });
 
     const lib = b.addLibrary(.{
