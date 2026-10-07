@@ -249,104 +249,122 @@ pub const Display = struct {
         self.list_refused = false;
     }
 
-    fn isCmd(msg: Message, name: []const u8) bool {
-        return std.mem.eql(u8, msg.command, name);
-    }
+    const Route = struct {
+        cmd: []const u8,
+        run: *const fn (*Display, Message) anyerror!void,
+    };
+
+    /// Dispatch table: one entry per server command we render. Shared
+    /// handlers appear once per command (whois numerics, send errors) so
+    /// `handleServerMessage` is a loop with no `or` chains. Add a row here
+    /// instead of a branch when supporting a new numeric.
+    const routes = [_]Route{
+        .{ .cmd = "375", .run = handleMOTDStart },
+        .{ .cmd = "372", .run = handleMOTDLine },
+        .{ .cmd = "376", .run = handleMOTDEnd },
+        .{ .cmd = "321", .run = handleListStart },
+        .{ .cmd = "322", .run = handleListLine },
+        .{ .cmd = "323", .run = handleListEnd },
+        .{ .cmd = "353", .run = handleNames },
+        .{ .cmd = "366", .run = handleEndOfNames },
+        .{ .cmd = "JOIN", .run = handleJoin },
+        .{ .cmd = "PART", .run = handlePart },
+        .{ .cmd = "QUIT", .run = handleQuit },
+        .{ .cmd = "KICK", .run = handleKick },
+        .{ .cmd = "MODE", .run = handleMode },
+        .{ .cmd = "INVITE", .run = handleInvite },
+        .{ .cmd = "NICK", .run = handleNick },
+        .{ .cmd = "PRIVMSG", .run = handlePrivmsg },
+        .{ .cmd = "NOTICE", .run = handleNotice },
+        .{ .cmd = "TOPIC", .run = handleTopic },
+        .{ .cmd = "331", .run = handleNoTopic },
+        .{ .cmd = "332", .run = handleTopicReply },
+        .{ .cmd = "333", .run = handleTopicWhoTime },
+        .{ .cmd = "311", .run = handleWhois },
+        .{ .cmd = "312", .run = handleWhois },
+        .{ .cmd = "313", .run = handleWhois },
+        .{ .cmd = "317", .run = handleWhois },
+        .{ .cmd = "318", .run = handleWhois },
+        .{ .cmd = "319", .run = handleWhois },
+        .{ .cmd = "301", .run = handleWhois },
+        .{ .cmd = "352", .run = handleWhoLine },
+        .{ .cmd = "315", .run = handleEndOfWho },
+        .{ .cmd = "324", .run = handleChannelMode },
+        .{ .cmd = "329", .run = handleChannelCreated },
+        .{ .cmd = "341", .run = handleInviteConfirm },
+        .{ .cmd = "305", .run = handleAwayOff },
+        .{ .cmd = "306", .run = handleAwayOn },
+        .{ .cmd = "001", .run = handleWelcome },
+        .{ .cmd = "002", .run = handleHost },
+        .{ .cmd = "003", .run = handleCreated },
+        .{ .cmd = "004", .run = handleServerInfo },
+        .{ .cmd = "433", .run = handleNickInUse },
+        .{ .cmd = "461", .run = handleNeedMoreParams },
+        .{ .cmd = "401", .run = handleSendError },
+        .{ .cmd = "403", .run = handleSendError },
+        .{ .cmd = "404", .run = handleSendError },
+        .{ .cmd = "441", .run = handleSendError },
+        .{ .cmd = "442", .run = handleSendError },
+        .{ .cmd = "443", .run = handleSendError },
+        .{ .cmd = "473", .run = handleSendError },
+        .{ .cmd = "474", .run = handleSendError },
+        .{ .cmd = "475", .run = handleSendError },
+        .{ .cmd = "421", .run = handleUnknownCommand },
+    };
 
     pub fn handleServerMessage(self: *Display, msg: Message) !void {
-        if (isCmd(msg, "375")) {
-            try self.handleMOTDStart(msg);
-        } else if (isCmd(msg, "372")) {
-            try self.handleMOTDLine(msg);
-        } else if (isCmd(msg, "376")) {
-            try self.handleMOTDEnd(msg);
-        } else if (isCmd(msg, "321")) {
-            self.handleListStart();
-        } else if (isCmd(msg, "322")) {
-            self.handleListLine(msg);
-        } else if (isCmd(msg, "323")) {
-            self.handleListEnd();
-        } else if (isCmd(msg, "353")) {
-            self.handleNames(msg);
-        } else if (isCmd(msg, "366")) {
-            self.handleEndOfNames(msg);
-        } else if (isCmd(msg, "JOIN")) {
-            self.handleJoin(msg);
-        } else if (isCmd(msg, "PART")) {
-            self.handlePart(msg);
-        } else if (isCmd(msg, "QUIT")) {
-            self.handleQuit(msg);
-        } else if (isCmd(msg, "KICK")) {
-            self.handleKick(msg);
-        } else if (isCmd(msg, "MODE")) {
-            self.handleMode(msg);
-        } else if (isCmd(msg, "INVITE")) {
-            self.handleInvite(msg);
-        } else if (isCmd(msg, "NICK")) {
-            self.handleNick(msg);
-        } else if (isCmd(msg, "PRIVMSG")) {
-            self.handlePrivmsg(msg);
-        } else if (isCmd(msg, "NOTICE")) {
-            self.handleNotice(msg);
-        } else if (isCmd(msg, "TOPIC")) {
-            self.handleTopic(msg);
-        } else if (isCmd(msg, "331")) {
-            self.handleNoTopic(msg);
-        } else if (isCmd(msg, "332")) {
-            self.handleTopicReply(msg);
-        } else if (isCmd(msg, "333")) {
-            self.handleTopicWhoTime(msg);
-        } else if (isCmd(msg, "311") or isCmd(msg, "312") or isCmd(msg, "313") or
-            isCmd(msg, "317") or isCmd(msg, "318") or isCmd(msg, "319") or isCmd(msg, "301"))
-        {
-            self.handleWhois(msg);
-        } else if (isCmd(msg, "352")) {
-            self.handleWhoLine(msg);
-        } else if (isCmd(msg, "315")) {
-            self.handleEndOfWho(msg);
-        } else if (isCmd(msg, "324")) {
-            self.handleChannelMode(msg);
-        } else if (isCmd(msg, "329")) {
-            self.handleChannelCreated(msg);
-        } else if (isCmd(msg, "341")) {
-            self.handleInviteConfirm(msg);
-        } else if (isCmd(msg, "305")) {
-            line("You are no longer marked as away\n", .{});
-        } else if (isCmd(msg, "306")) {
-            line("You are now marked as away\n", .{});
-        } else if (isCmd(msg, "001")) {
-            statusLine(
-                "{s}✓ connected{s} {s}\n",
-                .{ fmt.green, fmt.reset, msg.trailing },
-                "Connected: {s}\n",
-                .{msg.trailing},
-            );
-        } else if (isCmd(msg, "002")) {
-            line("Host: {s}\n", .{msg.trailing});
-        } else if (isCmd(msg, "003")) {
-            line("Created: {s}\n", .{msg.trailing});
-        } else if (isCmd(msg, "004")) {
-            if (msg.params[0].len > 0) line("Server: {s}\n", .{msg.params[0]});
-        } else if (isCmd(msg, "433")) {
-            if (msg.params[1].len > 0) {
-                var nb: [256]u8 = undefined;
-                errLine("Nickname {s} is already in use\n", .{fmt.paintNick(msg.params[1], &nb)});
-            }
-        } else if (isCmd(msg, "461")) {
-            if (msg.params[1].len > 0) errLine("{s}: not enough parameters\n", .{msg.params[1]});
-        } else if (isCmd(msg, "401") or isCmd(msg, "403") or isCmd(msg, "404") or
-            isCmd(msg, "441") or isCmd(msg, "442") or isCmd(msg, "443") or
-            isCmd(msg, "473") or isCmd(msg, "474") or isCmd(msg, "475"))
-        {
-            self.handleSendError(msg);
-        } else if (isCmd(msg, "421")) {
-            if (msg.params[1].len > 0) {
-                errLine("{s}: {s}\n", .{ msg.params[1], msg.trailing });
-            } else if (msg.trailing.len > 0) {
-                errLine("{s}\n", .{msg.trailing});
-            }
+        for (routes) |r| {
+            if (std.mem.eql(u8, msg.command, r.cmd)) return try r.run(self, msg);
         }
         // Other numerics/commands are ignored on purpose.
+    }
+
+    fn handleAwayOff(_: *Display, _: Message) !void {
+        line("You are no longer marked as away\n", .{});
+    }
+
+    fn handleAwayOn(_: *Display, _: Message) !void {
+        line("You are now marked as away\n", .{});
+    }
+
+    fn handleWelcome(_: *Display, msg: Message) !void {
+        statusLine(
+            "{s}✓ connected{s} {s}\n",
+            .{ fmt.green, fmt.reset, msg.trailing },
+            "Connected: {s}\n",
+            .{msg.trailing},
+        );
+    }
+
+    fn handleHost(_: *Display, msg: Message) !void {
+        line("Host: {s}\n", .{msg.trailing});
+    }
+
+    fn handleCreated(_: *Display, msg: Message) !void {
+        line("Created: {s}\n", .{msg.trailing});
+    }
+
+    fn handleServerInfo(_: *Display, msg: Message) !void {
+        if (msg.params[0].len > 0) line("Server: {s}\n", .{msg.params[0]});
+    }
+
+    fn handleNickInUse(_: *Display, msg: Message) !void {
+        if (msg.params[1].len > 0) {
+            var nb: [256]u8 = undefined;
+            errLine("Nickname {s} is already in use\n", .{fmt.paintNick(msg.params[1], &nb)});
+        }
+    }
+
+    fn handleNeedMoreParams(_: *Display, msg: Message) !void {
+        if (msg.params[1].len > 0) errLine("{s}: not enough parameters\n", .{msg.params[1]});
+    }
+
+    fn handleUnknownCommand(_: *Display, msg: Message) !void {
+        if (msg.params[1].len > 0) {
+            errLine("{s}: {s}\n", .{ msg.params[1], msg.trailing });
+        } else if (msg.trailing.len > 0) {
+            errLine("{s}\n", .{msg.trailing});
+        }
     }
 
     // --- MOTD (375/372/376) ---
@@ -405,7 +423,7 @@ pub const Display = struct {
 
     // --- LIST (321/322/323) ---
 
-    fn handleListStart(self: *Display) void {
+    fn handleListStart(self: *Display, _: Message) !void {
         self.in_channel_list = true;
         if (fmt.isEnabled()) {
             out.print("\n{s}{s}channels{s}  {s}users  topic{s}\n", .{ fmt.bold, fmt.cyan, fmt.reset, fmt.dim, fmt.reset });
@@ -423,7 +441,7 @@ pub const Display = struct {
         self.list_refused = false;
     }
 
-    fn handleListLine(self: *Display, msg: Message) void {
+    fn handleListLine(self: *Display, msg: Message) !void {
         if (!self.in_channel_list and !self.list_pending) return;
         // params: [nick, channel, usercount]
         const channel = msg.params[1];
@@ -435,7 +453,7 @@ pub const Display = struct {
         line("{s}  {s}  {s}\n", .{ fmt.paintChannel(channel, &chb), users, topic });
     }
 
-    fn handleListEnd(self: *Display) void {
+    fn handleListEnd(self: *Display, _: Message) !void {
         if (self.in_channel_list) {
             self.in_channel_list = false;
             if (fmt.isEnabled()) {
@@ -483,14 +501,14 @@ pub const Display = struct {
 
     // --- NAMES (353/366) ---
 
-    fn handleNames(_: *Display, msg: Message) void {
+    fn handleNames(_: *Display, msg: Message) !void {
         // params: [nick, =, channel]
         if (msg.params[2].len == 0) return;
         var chb: [256]u8 = undefined;
         line("Users in {s}: {s}\n", .{ fmt.paintChannel(msg.params[2], &chb), msg.trailing });
     }
 
-    fn handleEndOfNames(_: *Display, msg: Message) void {
+    fn handleEndOfNames(_: *Display, msg: Message) !void {
         if (msg.params[1].len == 0) return;
         var chb: [256]u8 = undefined;
         line("End of /names for {s}\n", .{fmt.paintChannel(msg.params[1], &chb)});
@@ -516,7 +534,7 @@ pub const Display = struct {
         return std.mem.startsWith(u8, target, "#") or std.mem.startsWith(u8, target, "&");
     }
 
-    fn handleJoin(self: *Display, msg: Message) void {
+    fn handleJoin(self: *Display, msg: Message) !void {
         const prefix = msg.prefix orelse return;
         const nick = nickOnly(prefix);
         const channel = msg.params[0];
@@ -537,7 +555,7 @@ pub const Display = struct {
         }
     }
 
-    fn handlePart(self: *Display, msg: Message) void {
+    fn handlePart(self: *Display, msg: Message) !void {
         const prefix = msg.prefix orelse return;
         const nick = nickOnly(prefix);
         const channel = msg.params[0];
@@ -562,7 +580,7 @@ pub const Display = struct {
         }
     }
 
-    fn handleQuit(_: *Display, msg: Message) void {
+    fn handleQuit(_: *Display, msg: Message) !void {
         const prefix = msg.prefix orelse return;
         const nick = nickOnly(prefix);
         var nb: [256]u8 = undefined;
@@ -573,7 +591,7 @@ pub const Display = struct {
         }
     }
 
-    fn handleKick(self: *Display, msg: Message) void {
+    fn handleKick(self: *Display, msg: Message) !void {
         const prefix = msg.prefix orelse return;
         const kicker = nickOnly(prefix);
         const channel = msg.params[0];
@@ -606,7 +624,7 @@ pub const Display = struct {
         }
     }
 
-    fn handleMode(_: *Display, msg: Message) void {
+    fn handleMode(_: *Display, msg: Message) !void {
         const target = msg.params[0];
         const modes = msg.params[1];
         if (target.len == 0 or modes.len == 0) return;
@@ -627,7 +645,7 @@ pub const Display = struct {
         }
     }
 
-    fn handleInvite(_: *Display, msg: Message) void {
+    fn handleInvite(_: *Display, msg: Message) !void {
         const prefix = msg.prefix orelse return;
         const nick = nickOnly(prefix);
         // INVITE params: [me, channel] on most servers (target first on some).
@@ -659,7 +677,7 @@ pub const Display = struct {
         return buf[0..len];
     }
 
-    fn handleNick(self: *Display, msg: Message) void {
+    fn handleNick(self: *Display, msg: Message) !void {
         const prefix = msg.prefix orelse return;
         const old_nick = nickOnly(prefix);
         const new_nick = msg.params[0];
@@ -678,7 +696,7 @@ pub const Display = struct {
         }
     }
 
-    fn handlePrivmsg(self: *Display, msg: Message) void {
+    fn handlePrivmsg(self: *Display, msg: Message) !void {
         const prefix = msg.prefix orelse return;
         const nick = nickOnly(prefix);
         const target = msg.params[0];
@@ -723,7 +741,7 @@ pub const Display = struct {
         }
     }
 
-    fn handleNotice(self: *Display, msg: Message) void {
+    fn handleNotice(self: *Display, msg: Message) !void {
         const target = msg.params[0];
         if (target.len == 0) return;
         self.noteListRefusal(msg.trailing);
@@ -744,7 +762,7 @@ pub const Display = struct {
         }
     }
 
-    fn handleTopic(_: *Display, msg: Message) void {
+    fn handleTopic(_: *Display, msg: Message) !void {
         const prefix = msg.prefix orelse return;
         const channel = msg.params[0];
         if (channel.len == 0) return;
@@ -753,7 +771,7 @@ pub const Display = struct {
         event("Topic for {s} changed by {s}: {s}\n", .{ fmt.paintChannel(channel, &chb), fmt.paintNick(nickOnly(prefix), &nb), reasonOf(msg, 1) });
     }
 
-    fn handleTopicReply(_: *Display, msg: Message) void {
+    fn handleTopicReply(_: *Display, msg: Message) !void {
         // params: [nick, channel]
         if (msg.params[1].len == 0) return;
         var chb: [256]u8 = undefined;
@@ -764,14 +782,14 @@ pub const Display = struct {
         }
     }
 
-    fn handleNoTopic(_: *Display, msg: Message) void {
+    fn handleNoTopic(_: *Display, msg: Message) !void {
         // params: [nick, channel]
         if (msg.params[1].len == 0) return;
         var chb: [256]u8 = undefined;
         line("No topic set for {s}\n", .{fmt.paintChannel(msg.params[1], &chb)});
     }
 
-    fn handleTopicWhoTime(_: *Display, msg: Message) void {
+    fn handleTopicWhoTime(_: *Display, msg: Message) !void {
         // params: [nick, channel, set-by, timestamp]
         if (msg.params[1].len == 0) return;
         const set_by = msg.params[2];
@@ -785,7 +803,7 @@ pub const Display = struct {
         }
     }
 
-    fn handleWhois(_: *Display, msg: Message) void {
+    fn handleWhois(_: *Display, msg: Message) !void {
         // params[1] is the queried nick for all these numerics.
         const nick = msg.params[1];
         var nb: [256]u8 = undefined;
@@ -810,7 +828,7 @@ pub const Display = struct {
         }
     }
 
-    fn handleWhoLine(_: *Display, msg: Message) void {
+    fn handleWhoLine(_: *Display, msg: Message) !void {
         // 352 params: [me, channel, user, host, server, nick, flags] + hopcount realname
         const nick = msg.params[5];
         if (nick.len == 0) return;
@@ -830,13 +848,13 @@ pub const Display = struct {
         }
     }
 
-    fn handleEndOfWho(_: *Display, msg: Message) void {
+    fn handleEndOfWho(_: *Display, msg: Message) !void {
         // 315 params: [me, target]
         if (msg.params[1].len == 0) return;
         line("End of /who for {s}\n", .{msg.params[1]});
     }
 
-    fn handleChannelMode(_: *Display, msg: Message) void {
+    fn handleChannelMode(_: *Display, msg: Message) !void {
         // 324 params: [me, channel, modes, ...args]
         const channel = msg.params[1];
         const modes = msg.params[2];
@@ -853,7 +871,7 @@ pub const Display = struct {
         }
     }
 
-    fn handleChannelCreated(_: *Display, msg: Message) void {
+    fn handleChannelCreated(_: *Display, msg: Message) !void {
         // 329 params: [me, channel, timestamp]
         if (msg.params[1].len == 0) return;
         var chb: [256]u8 = undefined;
@@ -862,7 +880,7 @@ pub const Display = struct {
         }
     }
 
-    fn handleInviteConfirm(_: *Display, msg: Message) void {
+    fn handleInviteConfirm(_: *Display, msg: Message) !void {
         // 341 params: [me, nick, channel]
         const nick = msg.params[1];
         const channel = msg.params[2];
@@ -889,7 +907,7 @@ pub const Display = struct {
     /// Show server rejections for messages we tried to send, e.g.
     /// 404 "Cannot send to channel" when not joined. params[1] is the
     /// target, trailing carries the human-readable reason.
-    fn handleSendError(_: *Display, msg: Message) void {
+    fn handleSendError(_: *Display, msg: Message) !void {
         const target = msg.params[1];
         if (target.len > 0 and msg.trailing.len > 0) {
             errLine("{s}: {s}\n", .{ target, msg.trailing });
@@ -1315,4 +1333,30 @@ test "savedFor returns null without history or for unknown conversations" {
     try t.expect(d.savedFor("#rust") == null);
     try d.setHistory(&h, "irc.oftc.net");
     try t.expect(d.savedFor("#zig") == null);
+}
+
+test "dispatch ignores unknown commands and has no duplicate routes" {
+    const t = std.testing;
+    var d = try Display.init(t.allocator);
+    defer d.deinit();
+    try d.setCurrentNick("tester");
+    // Unknown numerics/commands are ignored on purpose, never an error.
+    try d.handleServerMessage(.{ .command = "999", .trailing = "whatever" });
+    try d.handleServerMessage(.{ .command = "BOGUS" });
+
+    // Every command maps to exactly one row: no duplicates to diverge.
+    for (Display.routes, 0..) |a, i| {
+        for (Display.routes[0..i]) |b| {
+            try t.expect(!std.mem.eql(u8, a.cmd, b.cmd));
+        }
+    }
+    // Grouped handlers stay covered after refactor.
+    var whois_rows: usize = 0;
+    var send_err_rows: usize = 0;
+    for (Display.routes) |r| {
+        if (r.run == Display.handleWhois) whois_rows += 1;
+        if (r.run == Display.handleSendError) send_err_rows += 1;
+    }
+    try t.expectEqual(@as(usize, 7), whois_rows);
+    try t.expectEqual(@as(usize, 9), send_err_rows);
 }
