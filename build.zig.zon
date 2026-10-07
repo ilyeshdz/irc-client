@@ -1,6 +1,6 @@
 .{
     .name = .irc_client,
-    .version = "0.16.0",
+    .version = "0.2.0",
     .dependencies = .{
         .tls = .{
             .url = "git+https://github.com/ianic/tls.zig#ba3008f7d6750b528a4641e311816ad65c3ca426",
