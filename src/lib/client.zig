@@ -249,14 +249,26 @@ pub const IrcClient = struct {
 
         // Format into a complete line first: an over-long message must never
         // reach the wire half-written, and must not be mistaken for a socket
-        // failure (that would trigger a pointless reconnect).
+        // failure (that would trigger a pointless reconnect). A CR/LF inside
+        // any field would split one message into two on the wire, so it is
+        // rejected before formatting instead.
         var line: [MAX_MESSAGE_LENGTH]u8 = undefined;
         var fixed = std.Io.Writer.fixed(&line);
-        message.format(&fixed) catch return error.MessageTooLong;
+        message.format(&fixed) catch |err| {
+            if (err == error.InvalidMessage) return err;
+            return error.MessageTooLong;
+        };
 
         if (self.tls_state) |state| {
             state.tls_conn.writeAll(fixed.buffered()) catch |err| {
                 self.closeStream(); // the socket died, not the message
+                return err;
+            };
+            // tls.zig already flushes its ciphertext per record inside
+            // encryptWrite, so the bytes above reached the socket writer;
+            // flush the tail explicitly in case buffering ever changes.
+            state.sock_writer.interface.flush() catch |err| {
+                self.closeStream();
                 return err;
             };
             return;
@@ -276,7 +288,28 @@ pub const IrcClient = struct {
 
     /// Send a raw command with variable parameters.
     pub fn sendRaw(self: *IrcClient, command: []const u8, params: []const u8) !void {
-        try self.send(Message{ .command = command, .params = .{params} ++ .{""} ** 14 });
+        if (command.len == 0) return error.InvalidMessage;
+        // Split "a b c" into separate params so the wire form stays one line
+        // with single spaces; the trailing chunk (after 14 middles) goes as
+        // trailing so nothing is silently dropped.
+        var middles: [14][]const u8 = .{""} ** 14;
+        var n: usize = 0;
+        var trailing: []const u8 = "";
+        var it = std.mem.tokenizeScalar(u8, params, ' ');
+        while (it.next()) |tok| {
+            if (n < middles.len) {
+                middles[n] = tok;
+                n += 1;
+            } else {
+                // Everything past 14 middles becomes trailing (re-joined).
+                const start = tok.ptr - params.ptr;
+                trailing = std.mem.trimStart(u8, params[start..], " ");
+                break;
+            }
+        }
+        var msg = Message{ .command = command, .trailing = trailing };
+        @memcpy(msg.params[0..14], middles[0..14]);
+        try self.send(msg);
     }
 
     /// Join a channel (remembered for reconnects).
@@ -287,12 +320,39 @@ pub const IrcClient = struct {
 
     /// Request the server's channel list.
     pub fn listChannels(self: *IrcClient) !void {
-        try self.sendRaw("list", "");
+        try self.sendRaw("LIST", "");
     }
 
     /// Change nickname.
     pub fn changeNick(self: *IrcClient, nick: []const u8) !void {
         try self.send(Message{ .command = "NICK", .params = .{nick} ++ .{""} ** 14 });
+    }
+
+    /// 433 fallback: our nick is taken (ghost after a reconnect, collision
+    /// at login). Appends "_" and retries once; the caller repeats on the
+    /// next 433. Returns the new nick owned by the client.
+    pub fn useAlternateNick(self: *IrcClient) ![]const u8 {
+        const base = if (self.current_nick.len > 0) self.current_nick else self.username;
+        if (base.len == 0) return error.InvalidMessage;
+        var buf: [33]u8 = undefined;
+        const alt = alternateFor(base, &buf);
+        try self.send(Message{ .command = "NICK", .params = .{alt} ++ .{""} ** 14 });
+        try self.replaceOwned(&self.current_nick, alt);
+        return self.current_nick;
+    }
+
+    /// Pure nick fallback used by useAlternateNick: `bob` -> `bob_`,
+    /// truncated to 32 so the retry survives server nicklen limits.
+    fn alternateFor(base: []const u8, buf: *[33]u8) []const u8 {
+        const max_nick: usize = 32;
+        if (base.len + 1 <= max_nick) {
+            @memcpy(buf[0..base.len], base);
+            buf[base.len] = '_';
+            return buf[0 .. base.len + 1];
+        }
+        @memcpy(buf[0 .. max_nick - 1], base[0 .. max_nick - 1]);
+        buf[max_nick - 1] = '_';
+        return buf[0..max_nick];
     }
 
     /// Request the topic of a channel.
@@ -331,17 +391,20 @@ pub const IrcClient = struct {
 
     /// Set modes on a target, e.g. `/mode #zig +o alice`.
     pub fn setMode(self: *IrcClient, target: []const u8, modes: []const u8) !void {
-        var first: []const u8 = modes;
-        var rest: []const u8 = "";
-        if (std.mem.indexOfScalar(u8, modes, ' ')) |i| {
-            first = modes[0..i];
-            rest = std.mem.trimStart(u8, modes[i + 1 ..], " ");
+        // Split every whitespace-separated token so `+o alice bob` becomes
+        // three params, not one param containing spaces (which the server
+        // would re-split unpredictably).
+        var params: [15][]const u8 = .{""} ** 15;
+        params[0] = target;
+        var n: usize = 1;
+        var it = std.mem.tokenizeScalar(u8, modes, ' ');
+        while (it.next()) |tok| {
+            if (n >= params.len) break;
+            params[n] = tok;
+            n += 1;
         }
-        if (rest.len > 0) {
-            try self.send(Message{ .command = "MODE", .params = .{ target, first, rest } ++ .{""} ** 12 });
-        } else {
-            try self.send(Message{ .command = "MODE", .params = .{ target, first } ++ .{""} ** 13 });
-        }
+        if (n == 1) return error.InvalidMessage;
+        try self.send(Message{ .command = "MODE", .params = params });
     }
 
     /// Kick a nick from a channel with an optional reason.
@@ -370,7 +433,7 @@ pub const IrcClient = struct {
     /// Send a /me action (CTCP ACTION) to a target.
     pub fn sendAction(self: *IrcClient, target: []const u8, text: []const u8) !void {
         var buf: [512]u8 = undefined;
-        const action = try std.fmt.bufPrint(&buf, "\x01ACTION {s}\x01", .{text});
+        const action = std.fmt.bufPrint(&buf, "\x01ACTION {s}\x01", .{text}) catch return error.MessageTooLong;
         try self.send(Message{ .command = "PRIVMSG", .params = .{target} ++ .{""} ** 14, .trailing = action });
     }
 
@@ -623,4 +686,28 @@ test "our own JOIN/PART/KICK decide what a reconnect rejoins" {
     try t.expect(client.getCurrentChannel() == null);
     client.syncMembership(try Message.parse(":alice!a@h PART #rust"));
     try t.expectEqual(@as(usize, 0), client.channels.items.len);
+}
+
+test "433 fallback appends underscore within nicklen" {
+    var buf: [33]u8 = undefined;
+    try std.testing.expectEqualStrings("bob_", IrcClient.alternateFor("bob", &buf));
+    var long: [32]u8 = undefined;
+    @memset(&long, 'a');
+    const alt = IrcClient.alternateFor(&long, &buf);
+    try std.testing.expectEqual(@as(usize, 32), alt.len);
+    try std.testing.expect(alt[31] == '_');
+}
+
+test "format rejects line breaks and empty commands" {
+    var out: [64]u8 = undefined;
+    var w = std.Io.Writer.fixed(&out);
+    try std.testing.expectError(error.InvalidMessage, (Message{
+        .command = "PRIVMSG",
+        .params = .{"#zig"} ++ .{""} ** 14,
+        .trailing = "a\nb",
+    }).format(&w));
+    w = std.Io.Writer.fixed(&out);
+    try std.testing.expectError(error.InvalidMessage, (Message{
+        .command = "",
+    }).format(&w));
 }

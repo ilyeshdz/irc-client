@@ -68,7 +68,10 @@ pub const Message = struct {
 
     /// Formats the message into a full IRC line, terminated by CRLF.
     pub fn format(self: Message, writer: *std.Io.Writer) !void {
+        if (self.command.len == 0) return error.InvalidMessage;
+        if (hasCrlf(self.command)) return error.InvalidMessage;
         if (self.prefix) |prefix| {
+            if (hasCrlf(prefix)) return error.InvalidMessage;
             try writer.writeAll(":");
             try writer.writeAll(prefix);
             try writer.writeAll(" ");
@@ -76,13 +79,20 @@ pub const Message = struct {
         try writer.writeAll(self.command);
         for (self.params) |param| {
             if (param.len == 0) continue;
+            if (hasCrlf(param)) return error.InvalidMessage;
             try writer.writeAll(" ");
             try writer.writeAll(param);
         }
         if (self.trailing.len > 0) {
+            if (hasCrlf(self.trailing)) return error.InvalidMessage;
             try writer.writeAll(" :");
             try writer.writeAll(self.trailing);
         }
         try writer.writeAll("\r\n");
+    }
+
+    fn hasCrlf(s: []const u8) bool {
+        return std.mem.indexOfScalar(u8, s, '\r') != null or
+            std.mem.indexOfScalar(u8, s, '\n') != null;
     }
 };

@@ -433,7 +433,15 @@ fn drainServer(client: *IrcClient, display: *Display, ibox: *InputBox, buf: *[51
             if (!client.isConnected()) return false;
             continue;
         };
-        if (msg) |m| try display.handleServerMessage(m);
+        if (msg) |m| {
+            try display.handleServerMessage(m);
+            // 433: nick taken (login collision, ghost on reconnect). Claim
+            // `nick_` at once so we don't sit unregistered in backoff.
+            if (std.mem.eql(u8, m.command, "433")) {
+                const alt = client.useAlternateNick() catch continue;
+                display.setCurrentNick(alt) catch {};
+            }
+        }
     }
     redrawPrompt(ibox, client);
     return true;
@@ -644,6 +652,8 @@ fn executeParsed(client: *IrcClient, display: *Display, cmd: Command) Outcome {
         if (!client.isConnected()) return .lost;
         if (err == error.MessageTooLong) {
             out.print("Message too long (512 byte IRC limit).\n", .{});
+        } else if (err == error.InvalidMessage) {
+            out.print("Message rejected: empty command or line break in text.\n", .{});
         } else {
             out.print("error: {s}\n", .{@errorName(err)});
         }
