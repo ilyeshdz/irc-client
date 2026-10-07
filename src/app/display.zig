@@ -15,4 +15,5 @@ test {
     _ = @import("display/topic.zig");
     _ = @import("display/who.zig");
     _ = @import("display/status.zig");
+    _ = @import("display/tests.zig");
 }
