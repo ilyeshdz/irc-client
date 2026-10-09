@@ -5,10 +5,6 @@ const tls = @import("tls");
 const IrcClient = @import("mod.zig").IrcClient;
 const send = @import("send.zig");
 
-// TLS via ianic/tls.zig (rather than std.crypto.tls): it answers server
-// CertificateRequests with an empty Certificate when no client auth is
-// configured, which Libera/OFTC require. std's client aborts the handshake
-// instead (upstream ziglang/zig#17446).
 pub const TlsState = struct {
     allocator: std.mem.Allocator,
     sock_reader: net.Stream.Reader,
