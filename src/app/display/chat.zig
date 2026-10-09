@@ -11,15 +11,14 @@ pub fn handlePrivmsg(self: *Display, msg: Message) !void {
     const target = msg.params[0];
     if (target.len == 0) return;
 
-    // Persist under the channel, or under the peer's nick for PMs, so
-    // a private conversation is one history entry per counterpart.
+    // History key: the channel, or the peer's nick for PMs (one entry
+    // per counterpart).
     var conv = target;
     if (!util.isChannelTarget(target)) {
         if (self.current_nick) |my_nick| {
             if (std.mem.eql(u8, target, my_nick)) {
                 conv = nick;
-                // PMs have no join event: show the saved conversation
-                // right before the first message of it we see.
+                // PMs have no join event: replay before the first message seen.
                 self.ensureReplayed(nick);
             }
         }

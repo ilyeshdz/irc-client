@@ -1,6 +1,5 @@
 /// Compatibility shim: picker now lives in `picker/` by responsibility
 /// (pure entries + parsing in `entries`, interactive prompts in `prompt`).
-/// Existing `@import("picker.zig")` references keep working.
 const entries = @import("picker/entries.zig");
 const prompt = @import("picker/prompt.zig");
 

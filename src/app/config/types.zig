@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// Built-in servers suggested when no profile matches. Maybe change that later
+/// Built-in servers suggested when no profile matches.
 pub const common_servers = [_]Server{
     .{ .host = "irc.ircnet.com", .port = default_port },
     .{ .host = "irc.libera.chat", .port = default_port },
@@ -13,7 +13,7 @@ pub const max_recent: usize = 5;
 /// Plain TCP fallback when no port is configured anywhere.
 pub const default_port: u16 = 6667;
 
-/// Default for TLS connections (e.g. irc.libera.chat:6697).
+/// Default port for TLS connections.
 pub const default_tls_port: u16 = 6697;
 
 pub const Server = struct {

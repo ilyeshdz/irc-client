@@ -62,7 +62,6 @@ test "motd collects lines between start and end" {
     var d = try Display.init(t.allocator);
     defer d.deinit();
 
-    // Stray lines outside a MOTD block are dropped, never buffered.
     try handleMOTDLine(&d, .{ .command = "372", .trailing = "stray" });
     try t.expectEqual(@as(usize, 0), d.motd_buffer.items.len);
 

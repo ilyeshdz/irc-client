@@ -30,8 +30,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    // Profiles live in ~/.config/irc-client/config (best effort: without a
-    // HOME we just run without persistence).
+    // Profiles live in ~/.config/irc-client/config.
     const cfg_path = Cfg.configPath(gpa) catch null;
     defer if (cfg_path) |p| gpa.free(p);
     var cfg = if (cfg_path) |p| Cfg.load(gpa, io, p) catch |err| blk: {
@@ -68,9 +67,7 @@ pub fn main(init: std.process.Init) !void {
         };
         have_choice = true;
     } else if (opts.positional.len > 0) {
-        // Quick path: `local`, `host`, `host:port`, or `host:+port`
-        // (`+` forces TLS). Flags still apply: --port overrides the
-        // port, --tls/--insecure force those modes on.
+        // Quick path: `local`, `host`, `host:port`, `host:+port` (`+` forces TLS).
         const arg_host = opts.positional[0];
         const mapped = if (std.mem.eql(u8, arg_host, "local")) "127.0.0.1" else arg_host;
         const split = Picker.splitHostPort(mapped);
@@ -100,7 +97,6 @@ pub fn main(init: std.process.Init) !void {
         have_choice = true;
     } else {
         choice = try Picker.pick(&cfg, gpa);
-        // Non-interactive flags still force the mode on for picker results.
         if (opts.options.tls) choice.tls = true;
         if (opts.options.insecure) choice.insecure = true;
         if (opts.options.port) |port_str| {
@@ -110,8 +106,7 @@ pub fn main(init: std.process.Init) !void {
             };
         }
         have_choice = true;
-        // Persist right away so a profile created above survives even if
-        // the connection below fails.
+        // Save now so a new profile survives even a failed connection below.
         if (cfg_path) |p| Cfg.save(&cfg, gpa, io, p) catch |err| std.log.warn("could not save config to {s}: {s}", .{ p, @errorName(err) });
     }
 
@@ -133,15 +128,13 @@ pub fn main(init: std.process.Init) !void {
 
     try client.handshake(choice.nick, choice.realname);
 
-    // Chat history lives in ~/.config/irc-client/history (best effort: a
-    // corrupt file just means we start over, like the config does).
+    // Chat history lives in ~/.config/irc-client/history.
     var history = History.load(gpa, io) catch |err| blk: {
         std.log.warn("ignoring corrupt history, starting fresh: {s}", .{@errorName(err)});
         break :blk History.init(gpa, io);
     };
     defer history.deinit();
 
-    // The interface layer owns its own display state; seed it with our nick.
     var display = try Display.init(gpa);
     defer display.deinit();
     try display.setCurrentNick(choice.nick);

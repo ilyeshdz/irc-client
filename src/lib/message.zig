@@ -1,6 +1,5 @@
 const std = @import("std");
 
-/// The maximum amount of params we can allocate to the memory
 const MAX_PARAMS = 15;
 
 pub const Message = struct {
@@ -8,15 +7,12 @@ pub const Message = struct {
     command: []const u8 = "",
     params: [MAX_PARAMS][]const u8 = .{""} ** MAX_PARAMS,
     trailing: []const u8 = "",
-    /// Raw IRCv3 tags (`@time=...;+draft/...`), without the leading `@`.
-    /// Parsed and skipped so tagged lines don't shift the command; the
-    /// client does not negotiate CAPs yet, so tags carry no semantics here.
+    /// Raw IRCv3 tags without the leading `@`. Parsed and skipped; no CAPs
+    /// are negotiated yet, so tags carry no semantics here.
     tags: ?[]const u8 = null,
 
-    /// Parses a message from a plain string into a `Message` struct.
-    /// Fails with `error.InvalidMessage` on empty lines, prefix-only lines
-    /// (`:nick` with no command) and missing commands, instead of returning
-    /// a silent empty struct.
+    /// Parses a line into a `Message`. Empty lines, prefix-only lines and
+    /// missing commands fail with `error.InvalidMessage`.
     pub fn parse(line_in: []const u8) !Message {
         var msg: Message = .{};
         // IRC lines end with CRLF; strip any trailing \r / \n so they don't
@@ -45,7 +41,6 @@ pub const Message = struct {
             }
         }
 
-        // Skip any extra spaces between prefix and command
         while (cursor < line.len and line[cursor] == ' ') : (cursor += 1) {}
         if (cursor >= line.len) return error.InvalidMessage;
 
@@ -59,7 +54,7 @@ pub const Message = struct {
             }
         }
 
-        var params: [MAX_PARAMS][]const u8 = .{""} ** MAX_PARAMS; // allocate and fill that allocated space with [1]const u8
+        var params: [MAX_PARAMS][]const u8 = .{""} ** MAX_PARAMS;
         var params_len: usize = 0;
 
         var params_slice: []const u8 = undefined;
@@ -86,7 +81,6 @@ pub const Message = struct {
         return msg;
     }
 
-    /// Formats the message into a full IRC line, terminated by CRLF.
     pub fn format(self: Message, writer: *std.Io.Writer) !void {
         if (self.command.len == 0) return error.InvalidMessage;
         if (hasForbidden(self.command)) return error.InvalidMessage;

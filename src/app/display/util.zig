@@ -97,8 +97,6 @@ pub fn parseAction(trailing: []const u8) ?[]const u8 {
 }
 
 test "colon-less single-word reasons fall back to params" {
-    // Servers may send `KICK #c nick bye` without ':'; the parser then
-    // leaves "bye" in params[2] instead of trailing.
     const parsed = try Message.parse(":op!u@h KICK #zig bob bye");
     try std.testing.expectEqualStrings("", parsed.trailing);
     try std.testing.expectEqualStrings("bye", reasonOf(parsed, 2));

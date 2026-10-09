@@ -45,8 +45,8 @@ pub fn handleListEnd(self: *Display, _: Message) !void {
     self.list_refused = false;
 }
 
-/// Detects server notices telling us the channel listing was refused
-/// (e.g. IRCnet's "/list is deprecated" notice) while a list is pending.
+/// Flag refusal notices (e.g. IRCnet's "/list is deprecated") while a list
+/// is pending, so the empty reply reads as refused, not as no channels.
 pub fn noteListRefusal(self: *Display, text: []const u8) void {
     if (!self.list_pending or self.list_count > 0) return;
     if (containsCaseInsensitive(text, "deprecat") or
@@ -80,7 +80,6 @@ test "refused LIST reports refusal instead of empty list" {
     defer d.deinit();
     try d.setCurrentNick("tester");
     d.beginList();
-    // IRCnet-style deprecation notice received while the list is pending.
     try chat.handleNotice(&d, .{
         .prefix = "ircnet.tngnet.nl",
         .command = "NOTICE",
@@ -88,7 +87,6 @@ test "refused LIST reports refusal instead of empty list" {
         .trailing = "Usage of /list for listing all channels is deprecated.",
     });
     try t.expect(d.list_refused);
-    // Server ends the list without any channel.
     try handleListEnd(&d, .{
         .prefix = "ircnet.tngnet.nl",
         .command = "323",

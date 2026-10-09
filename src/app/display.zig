@@ -1,7 +1,6 @@
 /// Compatibility shim: the display now lives in `display/` by domain
 /// (state + dispatch in `mod`, handlers in `motd`, `list`, `names`,
 /// `events`, `chat`, `topic`, `who`, `status`, shared bits in `util`).
-/// Existing `@import("display.zig").Display` references keep working.
 pub const Display = @import("display/mod.zig").Display;
 
 test {

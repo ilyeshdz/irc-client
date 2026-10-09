@@ -18,13 +18,9 @@ fn plaintextReader(self: *IrcClient) *std.Io.Reader {
     return &ensurePlainReader(self).interface;
 }
 
-/// Returns true if a complete server line can be read without blocking:
-/// either a full line is already buffered in the Reader, or the socket
-/// has fresh data waiting (checked with a zero-timeout poll).
-/// This avoids stalling on lines stuck in the Reader's userspace buffer
-/// while poll() sleeps on an empty kernel buffer.
-/// Returns error.NotConnected while the socket is down, so a dropped
-/// connection cannot be mistaken for a quiet one.
+/// True when a server line can be read without blocking: a full line is
+/// already buffered, or poll() sees fresh socket data. Reports
+/// error.NotConnected while down, so a dead socket never looks idle.
 pub fn hasCompleteLine(self: *IrcClient) !bool {
     if (!self.connected) return error.NotConnected;
     const r = plaintextReader(self);
@@ -39,8 +35,7 @@ pub fn readMessageInto(self: *IrcClient, buffer: []u8) !?Message {
     if (!self.connected) return error.NotConnected;
     const r = plaintextReader(self);
     const line = readUntilEndOfLine(r, buffer) catch |err| {
-        // A truncated line is dropped, but the socket is still fine;
-        // anything else means the connection is gone.
+        // A truncated line is dropped but the socket is still alive.
         if (err != error.MessageTooLong) conn.closeStream(self);
         return err;
     };
@@ -53,8 +48,7 @@ pub fn readMessageInto(self: *IrcClient, buffer: []u8) !?Message {
         return null;
     }
 
-    // Keep the client's owned nick in sync when we change nick
-    // (the display layer tracks its own copy from the same message).
+    // Our own nick change: the display tracks its own copy from the message.
     if (std.mem.eql(u8, msg.command, "NICK")) {
         if (msg.prefix) |prefix| {
             const excl = std.mem.indexOfScalar(u8, prefix, '!') orelse prefix.len;

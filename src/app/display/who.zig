@@ -95,9 +95,8 @@ pub fn handleInviteConfirm(_: *Display, msg: Message) !void {
     }
 }
 
-/// Show server rejections for messages we tried to send, e.g.
-/// 404 "Cannot send to channel" when not joined. params[1] is the
-/// target, trailing carries the human-readable reason.
+/// Show server rejections of messages we sent (e.g. 404 when not joined):
+/// params[1] is the target, trailing the human-readable reason.
 pub fn handleSendError(_: *Display, msg: Message) !void {
     const target = msg.params[1];
     if (target.len > 0 and msg.trailing.len > 0) {

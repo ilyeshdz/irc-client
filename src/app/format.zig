@@ -18,12 +18,12 @@ var probed: bool = false;
 var clock_io: ?std.Io = null;
 var clock_override: ?i64 = null;
 
-/// Provide the Io needed for wall-clock timestamps (called once at startup).
+/// Called once at startup: provides the Io for wall-clock timestamps.
 pub fn setIo(io: std.Io) void {
     clock_io = io;
 }
 
-/// For tests: force the timestamp clock to a fixed epoch value.
+/// Test hook: pin the timestamp clock to a fixed epoch value.
 pub fn setClockOverride(secs: ?i64) void {
     clock_override = secs;
 }
@@ -43,7 +43,7 @@ pub fn isEnabled() bool {
     return enabled;
 }
 
-/// For tests: force colors on/off.
+/// Test hook: force colors on/off.
 pub fn setEnabled(v: bool) void {
     probed = true;
     enabled = v;
@@ -70,16 +70,14 @@ pub fn paintChannel(channel: []const u8, out: *[256]u8) []const u8 {
     return wrap(cyan ++ bold, channel, out);
 }
 
-/// Current wall-clock seconds since epoch, or null when no clock is
-/// available (e.g. in tests before an Io is set).
+/// Wall-clock seconds since epoch, or null with no clock (tests).
 pub fn nowSecs() ?i64 {
     if (clock_override) |o| return o;
     if (clock_io) |io| return std.Io.Timestamp.now(io, .real).toSeconds();
     return null;
 }
 
-/// "12:34:56" UTC time of day into buf (always 8 bytes + sentinel).
-/// Falls back to "--:--:--" when no clock is available (e.g. in tests).
+/// "HH:MM:SS" UTC into buf; "--:--:--" with no clock.
 pub fn timestamp(buf: *[16]u8) []const u8 {
     const secs = nowSecs() orelse return "--:--:--";
     return timestampFromEpoch(secs, buf);
@@ -103,14 +101,13 @@ pub fn dimTimestamp(buf: *[16]u8, styled: *[32]u8) []const u8 {
     return dimTs(timestamp(buf), styled);
 }
 
-/// Dim-styled "HH:MM:SS" for an arbitrary epoch second — used when replaying
-/// history, where each line must keep the time it was sent at.
+/// Dim-styled "HH:MM:SS" for an arbitrary epoch second (history replay keeps
+/// each line's original send time).
 pub fn dimTimestampAt(epoch_secs: i64, buf: *[16]u8, styled: *[32]u8) []const u8 {
     return dimTs(timestampFromEpoch(epoch_secs, buf), styled);
 }
 
-// Grid helpers shared by the /help and --help menus so both line up the
-// same way: column widths are computed at comptime and padded with spaces.
+// Shared by /help and --help so both grids line up the same way.
 
 pub fn spaces(comptime n: usize) []const u8 {
     if (n == 0) return "";
@@ -122,8 +119,7 @@ pub fn pad(comptime s: []const u8, comptime width: usize) []const u8 {
     return s ++ spaces(width - s.len);
 }
 
-/// Drop SGR escape sequences (`\x1b[...m`) so a styled string can be compared
-/// against its plain form.
+/// Drop SGR escapes (`\x1b[...m`) so styled output compares equal to plain.
 pub fn stripAnsi(gpa: std.mem.Allocator, s: []const u8) ![]u8 {
     var list: std.ArrayList(u8) = .empty;
     errdefer list.deinit(gpa);
@@ -168,7 +164,6 @@ test "timestamp has HH:MM:SS shape" {
 test "timestamp without clock falls back to placeholder" {
     setClockOverride(null);
     var buf: [16]u8 = undefined;
-    // No Io set in tests, so no live clock is available.
     try std.testing.expectEqualStrings("--:--:--", timestamp(&buf));
 }
 

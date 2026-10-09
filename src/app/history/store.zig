@@ -6,9 +6,8 @@ const Message = types.Message;
 const Channel = types.Channel;
 const Server = types.Server;
 
-/// Message log persisted at ~/.config/irc-client/history (best effort:
-/// without a HOME we run without persistence). Every mutation flushes to
-/// disk so the file always reflects what is in memory.
+/// Message log at ~/.config/irc-client/history. Every mutation rewrites the
+/// whole file, so disk always mirrors memory — at O(history) per message.
 pub const History = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -19,14 +18,12 @@ pub const History = struct {
         return .{
             .allocator = allocator,
             .io = io,
-            // Takes ownership of the resolved path.
             .path = historyPath(allocator) catch null,
         };
     }
 
-    /// Builds a history that persists to a copy of `path`; pass null for
-    /// in-memory only (no disk writes). `path = null` is what tests use so
-    /// they never touch the real ~/.config file.
+    /// Same, but persisting to a copy of `path`; null means in-memory only
+    /// (no disk writes), which is what tests use.
     pub fn initWithPath(allocator: std.mem.Allocator, io: std.Io, path: ?[]const u8) History {
         return .{
             .allocator = allocator,
@@ -49,7 +46,6 @@ pub const History = struct {
         return history;
     }
 
-    /// Re-reads the history file, replacing everything currently in memory.
     pub fn reload(self: *History) !void {
         const path = self.path orelse return;
         const bytes = fileio.readFile(self.allocator, self.io, path) catch |err| {
@@ -60,7 +56,6 @@ pub const History = struct {
         try self.reloadFrom(bytes);
     }
 
-    /// Parses JSON bytes, replacing everything currently in memory.
     fn reloadFrom(self: *History, bytes: []const u8) !void {
         if (std.mem.trim(u8, bytes, " \t\r\n").len == 0) {
             self.clearServers();

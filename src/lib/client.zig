@@ -2,7 +2,6 @@
 /// (lifecycle + wrappers in `mod`, socket/TLS in `conn`, framing in
 /// `send`, IRC verbs in `commands`, membership in `state`, reads and
 /// PING auto-reply in `read`).
-/// Existing `@import("client.zig").IrcClient` references keep working.
 pub const IrcClient = @import("client/mod.zig").IrcClient;
 
 test {

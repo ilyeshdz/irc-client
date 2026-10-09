@@ -4,15 +4,12 @@ const IrcClient = @import("mod.zig").IrcClient;
 const conn = @import("conn.zig");
 const MAX_MESSAGE_LENGTH = @import("mod.zig").MAX_MESSAGE_LENGTH;
 
-/// Send a raw IRC command to the server.
 pub fn send(self: *IrcClient, message: Message) !void {
     if (!self.connected) return error.NotConnected;
 
-    // Format into a complete line first: an over-long message must never
-    // reach the wire half-written, and must not be mistaken for a socket
-    // failure (that would trigger a pointless reconnect). A CR/LF inside
-    // any field would split one message into two on the wire, so it is
-    // rejected before formatting instead.
+    // Frame the whole line before touching the socket: an over-long
+    // message must fail as MessageTooLong, never as a dead socket (which
+    // would trigger a pointless reconnect).
     var line: [MAX_MESSAGE_LENGTH]u8 = undefined;
     var fixed = std.Io.Writer.fixed(&line);
     message.format(&fixed) catch |err| {
@@ -22,12 +19,10 @@ pub fn send(self: *IrcClient, message: Message) !void {
 
     if (self.tls_state) |state| {
         state.tls_conn.writeAll(fixed.buffered()) catch |err| {
-            conn.closeStream(self); // the socket died, not the message
+            conn.closeStream(self); // socket died mid-write, not a bad message
             return err;
         };
-        // tls.zig already flushes its ciphertext per record inside
-        // encryptWrite, so the bytes above reached the socket writer;
-        // flush the tail explicitly in case buffering ever changes.
+        // tls.zig flushes per record; flush the tail in case that changes.
         state.sock_writer.interface.flush() catch |err| {
             conn.closeStream(self);
             return err;
@@ -38,7 +33,7 @@ pub fn send(self: *IrcClient, message: Message) !void {
     var buffer: [MAX_MESSAGE_LENGTH]u8 = undefined;
     var writer = self.stream.writer(self.io, &buffer);
     writer.interface.writeAll(fixed.buffered()) catch |err| {
-        conn.closeStream(self); // the socket died, not the message
+        conn.closeStream(self); // socket died mid-write, not a bad message
         return err;
     };
     writer.interface.flush() catch |err| {
@@ -47,12 +42,10 @@ pub fn send(self: *IrcClient, message: Message) !void {
     };
 }
 
-/// Send a raw command with variable parameters.
 pub fn sendRaw(self: *IrcClient, command: []const u8, params: []const u8) !void {
     if (command.len == 0) return error.InvalidMessage;
-    // Split "a b c" into separate params so the wire form stays one line
-    // with single spaces; the trailing chunk (after 14 middles) goes as
-    // trailing so nothing is silently dropped.
+    // One param per token; the overflow past 14 middles goes as trailing
+    // so nothing is silently dropped.
     var middles: [14][]const u8 = .{""} ** 14;
     var n: usize = 0;
     var trailing: []const u8 = "";
@@ -62,7 +55,6 @@ pub fn sendRaw(self: *IrcClient, command: []const u8, params: []const u8) !void 
             middles[n] = tok;
             n += 1;
         } else {
-            // Everything past 14 middles becomes trailing (re-joined).
             const start = tok.ptr - params.ptr;
             trailing = std.mem.trimStart(u8, params[start..], " ");
             break;

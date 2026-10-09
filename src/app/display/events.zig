@@ -84,7 +84,6 @@ pub fn handleKick(self: *Display, msg: Message) !void {
             fmt.paintChannel(channel, &chb),
         });
     }
-    // We were kicked: stop targeting this channel.
     if (self.current_nick) |my_nick| {
         if (std.mem.eql(u8, target, my_nick)) {
             if (self.current_channel) |current| {
@@ -118,7 +117,7 @@ pub fn handleMode(_: *Display, msg: Message) !void {
 pub fn handleInvite(_: *Display, msg: Message) !void {
     const prefix = msg.prefix orelse return;
     const nick = util.nickOnly(prefix);
-    // INVITE params: [me, channel] on most servers (target first on some).
+    // INVITE layouts vary: [me, channel] usually, target first on some.
     const channel = if (msg.params[1].len > 0) msg.params[1] else msg.trailing;
     if (channel.len == 0) return;
     var nb: [256]u8 = undefined;

@@ -1,6 +1,5 @@
 /// Compatibility shim: config now lives in `config/` by responsibility
 /// (data model in `types`, file + JSON persistence in `store`).
-/// Existing `@import("config.zig")` references keep working.
 const types = @import("config/types.zig");
 const store = @import("config/store.zig");
 

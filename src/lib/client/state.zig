@@ -87,7 +87,6 @@ pub fn forgetChannel(self: *IrcClient, channel: []const u8) void {
 }
 
 test "joined channels are remembered once and dropped on part" {
-    // No socket needed: only the bookkeeping is exercised.
     var client = IrcClient.initForTest(std.testing.allocator);
     defer client.deinit();
 

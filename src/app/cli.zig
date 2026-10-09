@@ -20,7 +20,6 @@ pub const Options = struct {
     };
 };
 
-/// ` <value>` for options that consume one, nothing for bare flags.
 fn valueSuffix(comptime takes_value: bool) []const u8 {
     return if (takes_value) " <value>" else "";
 }
@@ -42,9 +41,7 @@ fn descWidth(comptime o: type) usize {
     return w;
 }
 
-/// Build the whole --help text as one string: the column widths are derived
-/// from the option list at comptime, so entries never carry manual padding —
-/// add an option and the grid reflows.
+/// Column widths derive from the option list at comptime: add an option, the grid reflows.
 pub fn generateHelpText(comptime o: type) []const u8 {
     const ow = optionWidth(o);
     const dw = descWidth(o);
@@ -64,8 +61,7 @@ pub fn generateHelpText(comptime o: type) []const u8 {
     return text;
 }
 
-// Short aliases live only in `TAGS` above: derive them from there so adding
-// a flag never requires editing a second table.
+// Aliases live only in `TAGS`: adding a flag never edits a second table.
 fn shortFor(comptime T: type, comptime name: []const u8) ?u8 {
     if (!@hasDecl(T, "TAGS")) return null;
     const tags = T.TAGS;
@@ -96,9 +92,8 @@ pub fn Outcome(comptime T: type) type {
     return union(enum) { ok: Parsed(T), err: Error };
 }
 
-/// Pure argv parser. Accepted syntax: `--name value`, `--name=value`, `-n value`,
-/// and `--` to stop flag parsing. Positionals keep their original order, the last
-/// occurrence of a flag wins, and returned strings point into `args` (no copies).
+/// Pure argv parser: `--name value`, `--name=value`, `-n value`, `--` ends
+/// flags. Last flag wins; returned strings point into `args` (no copies).
 pub fn parse(comptime T: type, gpa: std.mem.Allocator, args: []const [:0]const u8) Outcome(T) {
     var opts: T = .{};
     var positionals: std.ArrayList([]const u8) = .empty;
@@ -194,7 +189,6 @@ fn oom() Error {
 
 test "every option starts its columns on the same byte" {
     const t = std.testing;
-    // The --help text is plain: no escapes, just the grid.
     try t.expect(std.mem.indexOf(u8, helpText, "\x1b[") == null);
 
     const ow = optionWidth(Options);
@@ -206,8 +200,6 @@ test "every option starts its columns on the same byte" {
     var lines = std.mem.splitScalar(u8, helpText, '\n');
     while (lines.next()) |line| {
         if (!std.mem.startsWith(u8, line, "  --")) continue;
-        // The description starts right after two spaces, and the short
-        // alias sits at a fixed column after it.
         try t.expect(line.len > alias_at);
         try t.expectEqual(@as(u8, ' '), line[desc_at - 1]);
         try t.expect(line[desc_at] != ' ');

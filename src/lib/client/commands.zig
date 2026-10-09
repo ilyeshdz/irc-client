@@ -10,19 +10,16 @@ pub fn joinChannel(self: *IrcClient, channel: []const u8) !void {
     try send.send(self, Message{ .command = "JOIN", .params = .{channel} ++ .{""} ** 14 });
 }
 
-/// Request the server's channel list.
 pub fn listChannels(self: *IrcClient) !void {
     try send.sendRaw(self, "LIST", "");
 }
 
-/// Change nickname.
 pub fn changeNick(self: *IrcClient, nick: []const u8) !void {
     try send.send(self, Message{ .command = "NICK", .params = .{nick} ++ .{""} ** 14 });
 }
 
-/// 433 fallback: our nick is taken (ghost after a reconnect, collision
-/// at login). Appends "_" and retries once; the caller repeats on the
-/// next 433. Returns the new nick owned by the client.
+/// 433 fallback: our nick is taken. Appends "_" and retries once; the
+/// caller repeats on the next 433. Returns the new nick owned by the client.
 pub fn useAlternateNick(self: *IrcClient) ![]const u8 {
     const base = if (self.current_nick.len > 0) self.current_nick else self.username;
     if (base.len == 0) return error.InvalidMessage;
@@ -47,12 +44,10 @@ pub fn alternateFor(base: []const u8, buf: *[33]u8) []const u8 {
     return buf[0..max_nick];
 }
 
-/// Request the topic of a channel.
 pub fn requestTopic(self: *IrcClient, channel: []const u8) !void {
     try send.send(self, Message{ .command = "TOPIC", .params = .{channel} ++ .{""} ** 14 });
 }
 
-/// Set the topic of a channel.
 pub fn setTopic(self: *IrcClient, channel: []const u8, text: []const u8) !void {
     try send.send(self, Message{ .command = "TOPIC", .params = .{channel} ++ .{""} ** 14, .trailing = text });
 }
@@ -66,26 +61,21 @@ pub fn requestNames(self: *IrcClient, channel: ?[]const u8) !void {
     }
 }
 
-/// Request WHOIS info about a nick.
 pub fn whois(self: *IrcClient, nick: []const u8) !void {
     try send.send(self, Message{ .command = "WHOIS", .params = .{nick} ++ .{""} ** 14 });
 }
 
-/// Request WHO info about a channel or nick mask.
 pub fn who(self: *IrcClient, target: []const u8) !void {
     try send.send(self, Message{ .command = "WHO", .params = .{target} ++ .{""} ** 14 });
 }
 
-/// Request the modes of a channel (or nick).
 pub fn requestMode(self: *IrcClient, target: []const u8) !void {
     try send.send(self, Message{ .command = "MODE", .params = .{target} ++ .{""} ** 14 });
 }
 
 /// Set modes on a target, e.g. `/mode #zig +o alice`.
 pub fn setMode(self: *IrcClient, target: []const u8, modes: []const u8) !void {
-    // Split every whitespace-separated token so `+o alice bob` becomes
-    // three params, not one param containing spaces (which the server
-    // would re-split unpredictably).
+    // One param per token: the server would re-split a param with spaces.
     var params: [15][]const u8 = .{""} ** 15;
     params[0] = target;
     var n: usize = 1;
@@ -99,7 +89,6 @@ pub fn setMode(self: *IrcClient, target: []const u8, modes: []const u8) !void {
     try send.send(self, Message{ .command = "MODE", .params = params });
 }
 
-/// Kick a nick from a channel with an optional reason.
 pub fn kick(self: *IrcClient, channel: []const u8, nick: []const u8, reason: ?[]const u8) !void {
     if (reason) |r| {
         try send.send(self, Message{ .command = "KICK", .params = .{ channel, nick } ++ .{""} ** 13, .trailing = r });
@@ -108,7 +97,6 @@ pub fn kick(self: *IrcClient, channel: []const u8, nick: []const u8, reason: ?[]
     }
 }
 
-/// Invite a nick to a channel.
 pub fn invite(self: *IrcClient, nick: []const u8, channel: []const u8) !void {
     try send.send(self, Message{ .command = "INVITE", .params = .{ nick, channel } ++ .{""} ** 13 });
 }
@@ -129,12 +117,10 @@ pub fn sendAction(self: *IrcClient, target: []const u8, text: []const u8) !void 
     try send.send(self, Message{ .command = "PRIVMSG", .params = .{target} ++ .{""} ** 14, .trailing = action });
 }
 
-/// Send a message to a target (channel or user).
 pub fn sendMessage(self: *IrcClient, target: []const u8, text: []const u8) !void {
     try send.send(self, Message{ .command = "PRIVMSG", .params = .{target} ++ .{""} ** 14, .trailing = text });
 }
 
-/// Leave a channel with an optional reason.
 pub fn partChannel(self: *IrcClient, channel: []const u8, reason: ?[]const u8) !void {
     state.forgetChannel(self, channel);
     if (reason) |r| {
@@ -144,7 +130,6 @@ pub fn partChannel(self: *IrcClient, channel: []const u8, reason: ?[]const u8) !
     }
 }
 
-/// Quit the server with an optional reason.
 pub fn quit(self: *IrcClient, reason: ?[]const u8) !void {
     if (reason) |r| {
         try send.send(self, Message{ .command = "QUIT", .trailing = r });

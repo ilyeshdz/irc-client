@@ -1,9 +1,8 @@
 const std = @import("std");
 const Display = @import("display.zig").Display;
 
-/// Extract the next complete line from the stdin buffer, consuming it.
-/// Returns a slice of `dst` without the trailing `\n`/`\r`, or null when
-/// no full line is buffered yet.
+/// Next complete stdin line, consuming it. Returns a slice of `dst` without
+/// the trailing newline, or null when no full line is buffered yet.
 pub fn takeLine(input_buffer: *[1024]u8, input_len: *usize, dst: *[1024]u8) ?[]const u8 {
     const newline_idx = std.mem.indexOfScalar(u8, input_buffer[0..input_len.*], '\n') orelse return null;
     const clean = std.mem.trimEnd(u8, input_buffer[0..newline_idx], "\r");
@@ -18,8 +17,7 @@ pub fn takeLine(input_buffer: *[1024]u8, input_len: *usize, dst: *[1024]u8) ?[]c
 pub const first_retry_ms: u64 = 1_000;
 pub const max_retry_ms: u64 = 30_000;
 
-/// A session that survived this long is healthy: the next drop starts the
-/// backoff over instead of continuing to escalate.
+/// A session this old is healthy: the next drop restarts the backoff.
 pub const stable_session_ms: i64 = 10_000;
 
 pub const ns_per_ms: i96 = 1_000_000;
@@ -28,13 +26,11 @@ pub fn nextRetryDelay(previous_ms: u64) u64 {
     return @min(previous_ms * 2, max_retry_ms);
 }
 
-/// How long ago `since` was, in milliseconds.
 pub fn ageMs(since: std.Io.Timestamp, now: std.Io.Timestamp) i64 {
     return since.durationTo(now).toMilliseconds();
 }
 
-/// Schedule the next attempt one backoff from `now`, double the delay for the
-/// wait after that, and return the wait that was just scheduled.
+/// Schedules the next attempt one backoff from `now` and returns that wait.
 pub fn scheduleRetry(at: *?std.Io.Timestamp, delay_ms: *u64, now: std.Io.Timestamp) u64 {
     const wait_ms = delay_ms.*;
     at.* = now.addDuration(.{ .nanoseconds = @as(i96, wait_ms) * ns_per_ms });
@@ -43,8 +39,7 @@ pub fn scheduleRetry(at: *?std.Io.Timestamp, delay_ms: *u64, now: std.Io.Timesta
 }
 
 /// Schedule the next attempt and tell the user how long the wait is.
-/// The wait is jittered by +-25% so clients dropped together do not
-/// retry in lockstep (thundering herd on server restart).
+/// Jittered by +-25% so clients dropped together do not retry in lockstep.
 pub fn planRetry(at: *?std.Io.Timestamp, delay_ms: *u64, now: std.Io.Timestamp, display: *Display) void {
     const wait_ms = scheduleRetry(at, delay_ms, now);
     const jittered = std.crypto.random.intRangeAtMost(u64, wait_ms * 3 / 4, wait_ms * 5 / 4);
@@ -69,7 +64,6 @@ pub const InputQueue = struct {
         return true;
     }
 
-    /// The oldest line, still in the queue until `pop`.
     pub fn peek(self: *const InputQueue) ?[]const u8 {
         if (self.len == 0) return null;
         return self.storage[self.head][0..self.lens[self.head]];
@@ -140,13 +134,13 @@ test "InputQueue holds lines in order, across the ring and up to its cap" {
     try t.expectEqualStrings("second", q.peek().?);
     q.pop();
 
-    // A full queue refuses new lines rather than overwriting the oldest.
+    // Full queues refuse new lines rather than overwriting the oldest.
     i = 0;
     while (i < max_queued_lines) : (i += 1) try t.expect(q.push("line"));
     try t.expectEqual(@as(usize, max_queued_lines), q.len);
     try t.expect(!q.push("one too many"));
 
-    // A line that cannot fit in a slot is refused even with room to spare.
+    // Refused even with room to spare: nothing is silently truncated.
     var q2 = InputQueue{};
     var too_long: [1025]u8 = undefined;
     try t.expect(!q2.push(&too_long));
@@ -167,13 +161,9 @@ test "the retry is scheduled from now, doubles, and never busy-spins" {
     try t.expectEqual(now.nanoseconds + 2_000 * ns_per_ms, at.?.nanoseconds);
     try t.expectEqual(@as(u64, 4_000), delay);
 
-    // Nothing scheduled: block until the keyboard or the socket says
-    // otherwise. Already due: give the attempt the next pass immediately.
     try t.expectEqual(@as(i32, -1), pollTimeoutMs(null, now));
     try t.expectEqual(@as(i32, 0), pollTimeoutMs(std.Io.Timestamp.fromNanoseconds(now.nanoseconds - 1), now));
 
-    // A wait shorter than a millisecond still costs a full millisecond, so
-    // poll() can never turn into a spin.
     try t.expectEqual(@as(i32, 1), pollTimeoutMs(std.Io.Timestamp.fromNanoseconds(now.nanoseconds + 1), now));
     try t.expectEqual(@as(i32, 2), pollTimeoutMs(std.Io.Timestamp.fromNanoseconds(now.nanoseconds + 1_500_000), now));
 }

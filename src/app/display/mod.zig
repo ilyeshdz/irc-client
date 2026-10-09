@@ -20,10 +20,8 @@ const status = @import("status.zig");
 const max_replay = 50;
 
 pub const Display = struct {
-    // State shared with the `display/` domain modules (motd, list,
-    // events, ...), which implement handlers as free functions taking
-    // `*Display`. Struct fields are always visible wherever the type is;
-    // only methods need `pub` below.
+    // Handlers in `display/` are free functions taking `*Display`; fields
+    // are visible wherever the type is, only methods need `pub`.
     allocator: std.mem.Allocator,
     motd_buffer: std.ArrayList(u8),
     collecting_motd: bool,
@@ -90,7 +88,6 @@ pub const Display = struct {
         };
     }
 
-    /// Saved messages for `conv` on the current server, if any.
     fn savedFor(self: *Display, conv: []const u8) ?[]const HistMessage {
         const h = self.history orelse return null;
         const ip = self.server_ip orelse return null;
@@ -103,14 +100,13 @@ pub const Display = struct {
         return null;
     }
 
-    /// The newest `max_replay` entries of a saved log.
     fn replayWindow(messages: []const HistMessage) []const HistMessage {
         if (messages.len <= max_replay) return messages;
         return messages[messages.len - max_replay ..];
     }
 
-    /// Print saved history for a conversation exactly once per session,
-    /// so a rejoin or a chatty PM doesn't repeat the scrollback.
+    /// Print saved history exactly once per session: rejoins and chatty PMs
+    /// must not repeat the scrollback.
     pub fn ensureReplayed(self: *Display, conv: []const u8) void {
         for (self.replayed.items) |seen| {
             if (std.mem.eql(u8, seen, conv)) return;
@@ -136,8 +132,7 @@ pub const Display = struct {
         for (win) |m| self.printHistoryLine(conv, m);
     }
 
-    /// One saved message, styled like its live counterpart but keeping the
-    /// timestamp it was originally sent at.
+    /// One saved message, keeping its original send time.
     fn printHistoryLine(self: *Display, conv: []const u8, m: HistMessage) void {
         var tsb: [16]u8 = undefined;
         var tss: [32]u8 = undefined;
@@ -188,12 +183,10 @@ pub const Display = struct {
         self.current_nick = try self.allocator.dupe(u8, nick);
     }
 
-    /// Local status line (no server behind it).
     pub fn info(_: *Display, comptime f: []const u8, args: anytype) void {
         util.line(f, args);
     }
 
-    /// Local error line (no server behind it).
     pub fn err(_: *Display, comptime f: []const u8, args: anytype) void {
         util.errLine(f, args);
     }
@@ -208,7 +201,7 @@ pub const Display = struct {
         );
     }
 
-    /// Drop MOTD/LIST state owned by the connection that just died.
+    /// Drop MOTD/LIST state owned by the dead connection.
     pub fn resetConnectionState(self: *Display) void {
         self.collecting_motd = false;
         self.motd_buffer.clearRetainingCapacity();
@@ -218,8 +211,7 @@ pub const Display = struct {
         self.list_refused = false;
     }
 
-    /// Called when the user requests a channel list, so an empty reply
-    /// can be told apart from a refused one.
+    /// Mark a user-requested list, so an empty reply differs from a refused one.
     pub fn beginList(self: *Display) void {
         self.list_pending = true;
         self.list_count = 0;
@@ -231,10 +223,8 @@ pub const Display = struct {
         run: *const fn (*Display, Message) anyerror!void,
     };
 
-    /// Dispatch table: one entry per server command we render. Shared
-    /// handlers appear once per command (whois numerics, send errors) so
-    /// `handleServerMessage` is a loop with no `or` chains. Add a row here
-    /// instead of a branch when supporting a new numeric.
+    /// One row per server command we render. Shared handlers appear once per
+    /// command so dispatch stays a loop; add a row for each new numeric.
     const routes = [_]Route{
         .{ .cmd = "375", .run = motd.handleMOTDStart },
         .{ .cmd = "372", .run = motd.handleMOTDLine },
@@ -296,13 +286,12 @@ pub const Display = struct {
         // Other numerics/commands are ignored on purpose.
     }
 
-    /// Local echo of a message we just sent (the server never echoes our
-    /// own PRIVMSG back). Mirrors the incoming-message styling.
+    /// Echo of a message we just sent: the server never echoes our own
+    /// PRIVMSG back.
     pub fn echoSent(self: *Display, target: []const u8, text: []const u8, is_action: bool) void {
         const me = self.current_nick orelse "me";
-        // A PM conversation starts in either direction: replaying here (and
-        // marking it seen) stops the peer's first reply from replaying the
-        // very message we just watched go out. Channels replay on join.
+        // A PM starts in either direction: replay here, or the peer's first
+        // reply replays the message we just watched go out.
         if (!util.isChannelTarget(target)) self.ensureReplayed(target);
         var nb: [256]u8 = undefined;
         if (util.isChannelTarget(target)) {
@@ -318,8 +307,7 @@ pub const Display = struct {
             util.line("PM to {s}: {s}\n", .{ target, text });
         }
 
-        // Record what we sent, storing actions in the same CTCP form the
-        // server sends them so a future replay renders identically.
+        // Store actions in the server's CTCP form so replays render identically.
         if (self.current_nick) |my_nick| {
             if (is_action) {
                 var abuf: [1100]u8 = undefined;
@@ -353,7 +341,6 @@ test "first PM from a peer replays the saved conversation" {
     try t.expectEqual(@as(usize, 1), d.replayed.items.len);
     try t.expectEqualStrings("carol", d.replayed.items[0]);
 
-    // Later messages from the same peer don't replay again.
     try d.handleServerMessage(.{
         .prefix = "carol!u@h",
         .command = "PRIVMSG",
@@ -362,7 +349,6 @@ test "first PM from a peer replays the saved conversation" {
     });
     try t.expectEqual(@as(usize, 1), d.replayed.items.len);
 
-    // And both new messages were recorded on top of the two saved ones.
     try t.expectEqual(@as(usize, 4), d.savedFor("carol").?.len);
 }
 
@@ -432,7 +418,6 @@ test "dispatch ignores unknown commands and has no duplicate routes" {
     var d = try Display.init(t.allocator);
     defer d.deinit();
     try d.setCurrentNick("tester");
-    // Unknown numerics/commands are ignored on purpose, never an error.
     try d.handleServerMessage(.{ .command = "999", .trailing = "whatever" });
     try d.handleServerMessage(.{ .command = "BOGUS" });
 

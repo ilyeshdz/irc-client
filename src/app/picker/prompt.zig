@@ -6,9 +6,8 @@ const entries = @import("entries.zig");
 const Choice = entries.Choice;
 const Entry = entries.Entry;
 
-/// Interactive startup menu (cooked stdin, before raw mode starts).
-/// Prints profiles first (favorites, then rest), then recent servers,
-/// then built-in servers, and resolves nick/realname for the pick.
+/// Interactive startup menu (cooked stdin, before raw mode). Profiles first
+/// (favorites, then rest), then recents, built-ins, and nick resolution.
 pub fn pick(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
     var list: std.ArrayList(Entry) = .empty;
     defer list.deinit(allocator);
@@ -197,8 +196,7 @@ fn resolveNew(cfg: *Cfg.Config, allocator: std.mem.Allocator) !Choice {
     return choice;
 }
 
-/// Prompt for a value on cooked stdin; empty input keeps `default`.
-/// Returns an owned string.
+/// Prompt for a value on cooked stdin; empty input keeps `default` (owned result).
 pub fn ask(allocator: std.mem.Allocator, prompt: []const u8, default: []const u8) ![]u8 {
     out.print("{s} [{s}]: ", .{ prompt, default });
     const raw = try readLine(allocator);
@@ -211,9 +209,8 @@ pub fn ask(allocator: std.mem.Allocator, prompt: []const u8, default: []const u8
 fn readLine(allocator: std.mem.Allocator) ![]u8 {
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);
-    // One byte at a time: a single read() may return several lines, and any
-    // bytes past the first '\n' belong to the *next* prompt, so they must
-    // not be swallowed here (piped input arrives all at once).
+    // Byte-at-a-time: one read() may return several lines, and bytes past
+    // the first '\n' belong to the *next* prompt (piped input is all at once).
     var one: [1]u8 = undefined;
     while (true) {
         const n = try std.posix.read(std.posix.STDIN_FILENO, &one);

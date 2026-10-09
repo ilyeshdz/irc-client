@@ -45,8 +45,8 @@ pub fn openStream(self: *IrcClient) !void {
     }
 }
 
-/// Run a TLS handshake over the already-connected TCP stream.
-/// The root bundle lives in `tls_state` for the life of the connection.
+/// TLS handshake over the already-connected TCP stream. The root bundle
+/// lives in `tls_state` for the life of the connection.
 fn startTls(self: *IrcClient) !void {
     std.debug.assert(self.tls_state == null);
     const alloc = self.allocator;
@@ -87,11 +87,10 @@ fn startTls(self: *IrcClient) !void {
             .insecure_skip_verify = self.insecure,
         },
     ) catch |err| {
-        // The errdefers above release the bundle, buffers and state.
         return err;
     };
-    // The handshake wrote through the socket writer; the library
-    // flushes per record, but make sure the tail reached the wire.
+    // The library flushes per record; make sure the handshake tail reached
+    // the wire in case that buffering ever changes.
     state.sock_writer.interface.flush() catch |err| std.log.warn("tls handshake tail flush failed: {s}", .{@errorName(err)});
     state.tls_reader = state.tls_conn.reader(state.tls_read_buf);
     self.tls_state = state;
@@ -116,8 +115,8 @@ pub fn isConnected(self: *const IrcClient) bool {
     return self.connected;
 }
 
-/// Drop the socket without touching the remembered channels, so the
-/// event loop stops polling a dead fd until a reconnect succeeds.
+/// Drop the socket but keep the remembered channels, so the event loop
+/// stops polling a dead fd until a reconnect succeeds.
 pub fn disconnect(self: *IrcClient) void {
     closeStream(self);
 }
@@ -128,7 +127,7 @@ pub fn socketFd(self: *const IrcClient) std.posix.fd_t {
     return self.stream.socket.handle;
 }
 
-/// Reopen the connection, register again and rejoin remembered channels.
+/// Reopen the connection, re-register and rejoin remembered channels.
 pub fn reconnect(self: *IrcClient) !void {
     closeStream(self);
     try openStream(self);
@@ -140,7 +139,6 @@ pub fn reconnect(self: *IrcClient) !void {
     }
 }
 
-/// NICK + USER for the current socket, under the current nick.
 pub fn register(self: *IrcClient) !void {
     const nick = if (self.current_nick.len > 0) self.current_nick else self.username;
     try send.send(self, Message{ .command = "NICK", .params = .{nick} ++ .{""} ** 14 });

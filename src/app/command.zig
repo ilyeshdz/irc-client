@@ -33,8 +33,7 @@ pub const Command = union(enum) {
             return error.NoCurrentChannel;
         }
 
-        // Split "/cmd args..." into cmd and raw args (slices of `trimmed`,
-        // no allocation so returned slices stay valid as long as input lives).
+        // Split "/cmd args..."; the slices borrow `trimmed`, no allocation.
         const without_slash = trimmed[1..];
         const cmd_end = std.mem.indexOfScalar(u8, without_slash, ' ') orelse without_slash.len;
         const cmd = without_slash[0..cmd_end];
@@ -61,9 +60,8 @@ pub const Command = union(enum) {
             help,
         };
 
-        // Zig can't switch on a []u8 directly, so resolve the name (and its
-        // single-letter shortcut) to an enum first, then switch on that.
-        // Add a row here instead of a branch when supporting a new command.
+        // Zig can't switch on a []u8: resolve the name and its shortcut to
+        // an enum first. Add a row here to support a new command.
         const commands = std.StaticStringMap(Kind).initComptime(.{
             .{ "join", .join },
             .{ "j", .join },

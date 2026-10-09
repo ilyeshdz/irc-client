@@ -2,10 +2,9 @@ const std = @import("std");
 const out = @import("out.zig");
 const format = @import("format.zig");
 
-/// A minimal bottom-of-screen input box: raw-mode line editing with the
-/// prompt redrawn under server output. No fullscreen TUI, no external deps.
-/// When stdin is not a tty (pipes), raw mode stays off and the caller falls
-/// back to plain line reading.
+/// Minimal bottom-of-screen input box: raw-mode line editing, prompt
+/// redrawn under server output. No fullscreen TUI. On pipes (not a tty)
+/// raw mode stays off and the caller reads plain lines.
 pub const InputBox = struct {
     buf: [1024]u8 = undefined,
     len: usize = 0,
@@ -35,7 +34,6 @@ pub const InputBox = struct {
     pub fn deinit(self: *InputBox) void {
         if (!self.raw) return;
         self.raw = false;
-        // Clear the prompt line, then restore cooked mode.
         out.print("\r\x1b[K", .{});
         std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.orig) catch |err| std.log.debug("could not restore terminal mode: {s}", .{@errorName(err)});
     }
@@ -47,16 +45,16 @@ pub const InputBox = struct {
         eof,
     };
 
-    /// Feed one raw byte. Returns a completed line on Enter, interrupt on
-    /// Ctrl-C, eof on Ctrl-D with an empty buffer. Escape sequences
-    /// (arrows, etc.) are swallowed.
+    /// Feed one raw byte: completed line on Enter, interrupt on Ctrl-C,
+    /// eof on Ctrl-D with an empty buffer. Arrows and other escape
+    /// sequences are swallowed.
     pub fn feedByte(self: *InputBox, b: u8) Key {
         if (self.esc_state == 1) {
             self.esc_state = if (b == '[') 2 else 0;
             return .none;
         }
         if (self.esc_state == 2) {
-            // CSI ... final byte is in @-~ range.
+            // CSI final byte is in @-~ range.
             if (b >= 0x40 and b <= 0x7e) self.esc_state = 0;
             return .none;
         }
@@ -98,13 +96,11 @@ pub const InputBox = struct {
         return b >= 0x80 and b < 0xc0;
     }
 
-    /// Erase the prompt line so server output can print above it.
     pub fn hide(self: *InputBox) void {
         if (!self.raw) return;
         out.print("\r\x1b[K", .{});
     }
 
-    /// Redraw the prompt line with the current buffer.
     pub fn show(self: *InputBox, channel: ?[]const u8, nick: []const u8) void {
         if (!self.raw) return;
         if (format.isEnabled()) {
@@ -135,7 +131,7 @@ test "typing then enter submits the line" {
 
 test "backspace erases one utf-8 codepoint" {
     var box: InputBox = .{};
-    for ("aé") |c| _ = box.feedByte(c); // é is 2 bytes in UTF-8
+    for ("aé") |c| _ = box.feedByte(c);
     _ = box.feedByte(0x7f);
     try std.testing.expectEqualStrings("a", box.buf[0..box.len]);
     _ = box.feedByte(0x7f);

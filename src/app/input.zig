@@ -7,19 +7,16 @@ const InputBox = @import("inputbox.zig").InputBox;
 const queue = @import("queue.zig");
 const help = @import("help.zig");
 
-/// Re-exported so existing `input.Command` references keep working;
-/// the type itself lives in `command.zig`.
+/// Re-exported so `input.Command` keeps working; the type lives in `command.zig`.
 pub const Command = @import("command.zig").Command;
 const InputQueue = queue.InputQueue;
 
-/// Run one parsed command. The returned Outcome tells the event loop what to
-/// do next, so a send failure and a user quit are never confused with each
-/// other.
+/// Run one parsed command. The Outcome tells the loop what to do next, so a
+/// failed send and a user quit are never confused with each other.
 pub fn executeCommand(client: *IrcClient, display: *Display, cmd: Command) !Outcome {
     switch (cmd) {
         .Quit => |reason| {
-            // A failed QUIT still ends the session: it must not turn into a
-            // reconnect the user just asked to avoid.
+            // A failed QUIT still ends the session, never a reconnect.
             client.quit(reason) catch |err| std.log.debug("quit notice failed on the way out: {s}", .{@errorName(err)});
             return .quit;
         },
@@ -107,7 +104,6 @@ pub fn executeCommand(client: *IrcClient, display: *Display, cmd: Command) !Outc
     return .keep;
 }
 
-/// Redraw the input prompt with the client's current context.
 fn redrawPrompt(ibox: *InputBox, client: *IrcClient) void {
     ibox.show(client.getCurrentChannel(), client.current_nick);
 }
@@ -130,8 +126,7 @@ fn drainServer(client: *IrcClient, display: *Display, ibox: *InputBox, buf: *[51
         };
         if (msg) |m| {
             try display.handleServerMessage(m);
-            // 433: nick taken (login collision, ghost on reconnect). Claim
-            // `nick_` at once so we don't sit unregistered in backoff.
+            // 433 (nick taken): claim `nick_` at once, or sit unregistered in backoff.
             if (std.mem.eql(u8, m.command, "433")) {
                 const alt = client.useAlternateNick() catch |err| {
                     std.log.warn("433 fallback failed: {s}", .{@errorName(err)});
@@ -152,19 +147,15 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
     var input_buffer: [1024]u8 = undefined;
     var input_len: usize = 0;
 
-    // One backoff for the whole session, and the moment the current
-    // connection was established, so a flapping server keeps escalating
+    // One backoff for the whole session: a flapping server keeps escalating
     // instead of restarting at 1s on every drop.
     var delay_ms = queue.first_retry_ms;
     var session_started = std.Io.Timestamp.now(client.io, .awake);
 
-    // Null while connected; the moment of the next attempt while it is down.
-    // Everything about the wait lives here, so poll() and the reconnect
-    // always agree and neither of them has to block the other.
+    // Null while connected; the moment of the next attempt while down.
     var retry_at: ?std.Io.Timestamp = null;
     var connection_lost = false;
     var reconnect_requested = false;
-    // Typed while the connection was down; replayed once it is back.
     var queued = InputQueue{};
 
     var ibox = InputBox.init();
@@ -172,8 +163,7 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
     if (ibox.raw) redrawPrompt(&ibox, client);
 
     while (true) {
-        // Consume the flags first: the socket is dropped here, so a dead fd
-        // can never reach poll(), and the next pass makes the attempt.
+        // Drop the socket here so a dead fd can never reach poll().
         if (connection_lost or reconnect_requested) {
             ibox.hide();
             client.disconnect();
@@ -181,11 +171,9 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
             if (connection_lost) {
                 display.err("connection lost\n", .{});
                 if (queue.ageMs(session_started, now) >= queue.stable_session_ms) {
-                    // This session was healthy: start the next attempt at once.
                     delay_ms = queue.first_retry_ms;
                     retry_at = now;
                 } else {
-                    // It died right away: back off before trying again.
                     queue.planRetry(&retry_at, &delay_ms, now, display);
                 }
             } else {
@@ -199,16 +187,16 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
             }
             connection_lost = false;
             reconnect_requested = false;
-            // Nothing to wait for means the next pass prints the attempt and
-            // hides the prompt again; only a real wait needs it back.
+            // No wait scheduled: the next pass prints the attempt and hides
+            // the prompt again; only a real wait needs it back.
             if (queue.pollTimeoutMs(retry_at, now) != 0) redrawPrompt(&ibox, client);
             continue;
         }
 
         const now = std.Io.Timestamp.now(client.io, .awake);
 
-        // A due attempt runs before poll(), so the wait and the reconnect can
-        // never fight over the same iteration.
+        // A due attempt runs before poll(), so the wait and the reconnect
+        // never fight over one iteration.
         if (retry_at) |at| {
             if (at.nanoseconds <= now.nanoseconds) {
                 ibox.hide();
@@ -233,9 +221,8 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
             }
         }
 
-        // Rebuilt every pass: after a reconnect the old fd is closed and
-        // must not be polled again. A down connection has no fd at all, so
-        // the only thing that can wake poll() early is the keyboard.
+        // Rebuilt every pass: a reconnect closes the old fd, and a down
+        // connection has none, so only the keyboard can wake poll() early.
         const socket_fd: ?std.posix.fd_t = if (client.isConnected()) client.socketFd() else null;
         var poll_fds = [_]std.posix.pollfd{
             .{ .fd = stdin_fd, .events = std.posix.POLL.IN, .revents = 0 },
@@ -243,8 +230,7 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
         };
         _ = try std.posix.poll(&poll_fds, queue.pollTimeoutMs(retry_at, now));
 
-        // Stdin is handled before the socket is drained, so a typed line and
-        // a dead socket cannot race inside one iteration.
+        // Stdin first, so a typed line and a dead socket cannot race in one pass.
         if (poll_fds[0].revents & std.posix.POLL.IN != 0) {
             if (ibox.raw) {
                 var tmp: [256]u8 = undefined;
@@ -278,13 +264,11 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
                 }
                 const bytes_read = try std.posix.read(stdin_fd, input_buffer[input_len..]);
                 if (bytes_read == 0) {
-                    // EOF on stdin
                     break;
                 }
                 input_len += bytes_read;
 
-                // Process complete lines. Each line is copied out and consumed
-                // from the buffer *before* parsing, so a parse error can never
+                // Lines are consumed before parsing, so a parse error can never
                 // re-trigger on the same line (infinite error spam).
                 var line_buf: [1024]u8 = undefined;
                 while (queue.takeLine(&input_buffer, &input_len, &line_buf)) |clean_line| {
@@ -295,8 +279,8 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
             }
         }
 
-        // Drain all complete server lines, including ones already sitting in
-        // the Reader's userspace buffer (poll can't see those).
+        // Drain server lines too, including ones poll() can't see: those
+        // already sitting in the Reader's userspace buffer.
         if (!connection_lost and !reconnect_requested and client.isConnected()) {
             const drained = try drainServer(client, display, &ibox, &read_buffer);
             const hung_up = poll_fds[1].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL) != 0;
@@ -305,7 +289,6 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
     }
 }
 
-/// What the event loop should do with the line that was just submitted.
 const Outcome = enum {
     keep,
     quit,
@@ -313,7 +296,7 @@ const Outcome = enum {
     lost,
 };
 
-/// Reflect one Outcome into the loop's flags; true when the loop must exit.
+/// Fold one Outcome into the loop's flags; true when the loop must exit.
 fn routeOutcome(outcome: Outcome, connection_lost: *bool, reconnect_requested: *bool) bool {
     switch (outcome) {
         .keep => return false,
@@ -329,8 +312,8 @@ fn routeOutcome(outcome: Outcome, connection_lost: *bool, reconnect_requested: *
     }
 }
 
-/// Print why a submitted line could not be parsed. Local problems, so they
-/// are never queued behind a reconnect.
+/// Print why a line failed to parse. Local problems are never queued
+/// behind a reconnect.
 fn reportParseError(err: anyerror) void {
     if (err == error.NoCurrentChannel) {
         out.print("No current channel. Use /join first.\n", .{});
@@ -341,12 +324,10 @@ fn reportParseError(err: anyerror) void {
     }
 }
 
-/// Run an already-parsed command, turning a send failure into an Outcome
-/// instead of an error the loop would have to unwind.
+/// Run an already-parsed command, turning send failures into an Outcome.
 fn executeParsed(client: *IrcClient, display: *Display, cmd: Command) Outcome {
     return executeCommand(client, display, cmd) catch |err| {
-        // Only a dead socket means "reconnect"; everything else is just an
-        // error the user should see, not a reason to drop the session.
+        // Only a dead socket drops the session; anything else is shown.
         if (!client.isConnected()) return .lost;
         if (err == error.MessageTooLong) {
             out.print("Message too long (512 byte IRC limit).\n", .{});
@@ -359,7 +340,6 @@ fn executeParsed(client: *IrcClient, display: *Display, cmd: Command) Outcome {
     };
 }
 
-/// Parse and run one submitted input line.
 fn handleSubmittedLine(client: *IrcClient, display: *Display, clean_line: []const u8) Outcome {
     const parsed = Command.parse(clean_line, client.getCurrentChannel()) catch |err| {
         reportParseError(err);
@@ -369,9 +349,8 @@ fn handleSubmittedLine(client: *IrcClient, display: *Display, clean_line: []cons
     return executeParsed(client, display, cmd);
 }
 
-/// Run a submitted line now, or hold it until the connection is back. While
-/// it is down only Quit/Reconnect/Help still act at once; everything else
-/// waits in `queued` and is replayed after a successful reconnect.
+/// Run a submitted line now, or hold it while the connection is down. Down,
+/// only Quit/Reconnect/Help act at once; the rest waits in `queued`.
 fn submitLine(client: *IrcClient, display: *Display, line: []const u8, down: bool, queued: *InputQueue) Outcome {
     if (!down) return handleSubmittedLine(client, display, line);
 
@@ -392,9 +371,8 @@ fn submitLine(client: *IrcClient, display: *Display, line: []const u8, down: boo
     return .keep;
 }
 
-/// Replay lines typed while the connection was down. A line leaves the queue
-/// only once it was accepted, so one whose send fails again is retried after
-/// the next reconnect instead of being silently lost.
+/// Replay queued lines. A line leaves only once accepted, so a failed send
+/// is retried after the next reconnect instead of being lost.
 fn flushQueue(client: *IrcClient, display: *Display, queued: *InputQueue) ?Outcome {
     while (queued.peek()) |line| {
         const outcome = handleSubmittedLine(client, display, line);
@@ -443,7 +421,6 @@ test "lines typed while down are queued, and only leave once accepted" {
 
     var q = InputQueue{};
 
-    // Ordinary text waits for the connection instead of failing.
     try t.expectEqual(Outcome.keep, submitLine(&client, &d, "hello there", true, &q));
     try t.expectEqual(@as(usize, 1), q.len);
 
@@ -452,7 +429,6 @@ test "lines typed while down are queued, and only leave once accepted" {
     try t.expectEqual(Outcome.keep, submitLine(&client, &d, "/help", true, &q));
     try t.expectEqual(@as(usize, 1), q.len);
 
-    // Further lines stack up behind the first.
     try t.expectEqual(Outcome.keep, submitLine(&client, &d, "/msg #zig hi", true, &q));
     try t.expectEqual(@as(usize, 2), q.len);
 

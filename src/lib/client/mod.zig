@@ -8,6 +8,8 @@ const commands = @import("commands.zig");
 const state = @import("state.zig");
 const read = @import("read.zig");
 
+/// RFC 2812 line limit, CRLF included. Longer lines are dropped whole with
+/// MessageTooLong, never truncated mid-line.
 pub const MAX_MESSAGE_LENGTH = 512;
 
 pub const IrcClient = struct {
@@ -56,8 +58,7 @@ pub const IrcClient = struct {
             .allocator = allocator,
             .current_nick = "",
         };
-        // The struct now owns `host`, so deinit is the single owner from here
-        // on; a second free of the same slice would be a double free.
+        // Struct owns `host` from here on; deinit frees it exactly once.
         errdefer client.deinit();
         try conn.openStream(&client);
         return client;
@@ -77,7 +78,7 @@ pub const IrcClient = struct {
 
     pub fn deinit(self: *IrcClient) void {
         conn.closeStream(self);
-        // `free` of an empty slice is a no-op, so no length guards are needed.
+        // Freeing an empty slice is a no-op, so no length guards needed.
         self.allocator.free(self.host);
         self.allocator.free(self.username);
         self.allocator.free(self.realname);
@@ -87,7 +88,6 @@ pub const IrcClient = struct {
         self.channels.deinit(self.allocator);
     }
 
-    /// Handshake with the IRC server, sending the NICK and USER commands.
     pub fn handshake(self: *IrcClient, username: []const u8, realname: []const u8) !void {
         try self.replaceOwned(&self.username, username);
         try self.replaceOwned(&self.realname, realname);
@@ -95,8 +95,8 @@ pub const IrcClient = struct {
         try conn.register(self);
     }
 
-    /// Store a copy of `src` in `dest`, freeing whatever was there before.
-    /// Public for the `client/` domain modules (commands, read).
+    /// Store a copy of `src` in `dest`, freeing the previous value.
+    /// Public for the `client/` domain modules.
     pub fn replaceOwned(self: *IrcClient, dest: *[]const u8, src: []const u8) !void {
         const owned = try self.allocator.dupe(u8, src);
         self.allocator.free(dest.*);

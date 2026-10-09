@@ -9,8 +9,7 @@ pub const HelpRow = struct {
     alias: []const u8 = "",
 };
 
-/// The /help table. Column widths are derived from these rows at comptime, so
-/// entries never carry manual padding — add a row and the grid reflows.
+/// Column widths derive from these rows at comptime: add a row, the grid reflows.
 pub const help_rows = [_]HelpRow{
     .{ .cmd = "/join", .args = "<channel>", .desc = "Join a channel", .alias = "(alias: /j)" },
     .{ .cmd = "/part", .args = "<channel> [reason]", .desc = "Leave a channel", .alias = "(alias: /p)" },
@@ -39,8 +38,7 @@ pub fn colWidth(comptime field: []const u8) usize {
     return w;
 }
 
-/// The description column only needs alignment for rows that show an alias
-/// after it, so alias-less rows never get trailing spaces.
+/// Only alias rows set the description width, so alias-less rows get no padding.
 pub fn descWidth() usize {
     var w: usize = 0;
     for (help_rows) |row| {
@@ -49,9 +47,7 @@ pub fn descWidth() usize {
     return w;
 }
 
-/// Build the whole menu as one string, twice: once with color escapes and
-/// once without. Colors are a runtime decision (TTY / NO_COLOR), so both
-/// variants are baked at comptime and `printHelp` picks one per call.
+/// Both color variants are baked at comptime; `printHelp` picks one per call.
 fn generateHelp(comptime styled: bool) []const u8 {
     const head: []const u8 = if (styled) fmt.bold ++ fmt.cyan else "";
     const dim: []const u8 = if (styled) fmt.dim else "";
@@ -64,7 +60,6 @@ fn generateHelp(comptime styled: bool) []const u8 {
 
     var text: []const u8 = "\n" ++ head ++ "Available commands" ++ rst ++ "\n\n";
     for (help_rows) |row| {
-        // Anything that is not a slash command (like `<text>`) stays neutral.
         const code: []const u8 = if (std.mem.startsWith(u8, row.cmd, "/")) name else dim;
         const tail: []const u8 = if (row.alias.len == 0)
             row.desc
@@ -97,8 +92,6 @@ test "every help row starts its columns on the same byte" {
         const is_row = std.mem.startsWith(u8, line, "  /") or
             std.mem.startsWith(u8, line, "  <");
         if (!is_row) continue;
-        // The description starts right after two spaces, and nothing
-        // spills into the gap before it.
         try t.expect(line.len > desc_at);
         try t.expectEqual(@as(u8, ' '), line[desc_at - 1]);
         try t.expect(line[desc_at] != ' ');
@@ -119,7 +112,6 @@ test "the styled help is the plain grid plus color escapes" {
     defer t.allocator.free(stripped);
     try t.expectEqualStrings(help_plain, stripped);
 
-    // Colors wrap every field, they never change the visible text.
     try t.expect(std.mem.indexOf(u8, help_styled, fmt.bold ++ fmt.yellow ++ "/join") != null);
     try t.expect(std.mem.indexOf(u8, help_styled, fmt.dim ++ "(alias: /j)") != null);
 }

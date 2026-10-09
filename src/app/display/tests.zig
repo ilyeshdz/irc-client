@@ -15,7 +15,6 @@ test "send errors and local echo are displayed without crashing" {
         .params = .{ "tester", "#ghost" } ++ .{""} ** 13,
         .trailing = "Cannot send to channel (+n)",
     });
-    // Unknown command reply.
     try d.handleServerMessage(.{
         .prefix = "test.local",
         .command = "421",
@@ -120,7 +119,6 @@ test "incoming and outgoing messages are recorded into history" {
     defer h.deinit();
     try d.setHistory(&h, "irc.libera.chat");
 
-    // Incoming channel message + CTCP action.
     try d.handleServerMessage(.{
         .prefix = "alice!u@h",
         .command = "PRIVMSG",
@@ -140,7 +138,6 @@ test "incoming and outgoing messages are recorded into history" {
         .params = .{"tester"} ++ .{""} ** 14,
         .trailing = "psst",
     });
-    // Outgoing channel message + action + PM.
     d.echoSent("#zig", "hi back", false);
     d.echoSent("#zig", "nods", true);
     d.echoSent("carol", "secret", false);
