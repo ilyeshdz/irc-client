@@ -34,7 +34,10 @@ pub fn main(init: std.process.Init) !void {
     // HOME we just run without persistence).
     const cfg_path = Cfg.configPath(gpa) catch null;
     defer if (cfg_path) |p| gpa.free(p);
-    var cfg = if (cfg_path) |p| Cfg.load(gpa, io, p) catch Cfg.Config.init(gpa) else Cfg.Config.init(gpa);
+    var cfg = if (cfg_path) |p| Cfg.load(gpa, io, p) catch |err| blk: {
+        std.log.warn("ignoring corrupt config at {s}, starting fresh: {s}", .{ p, @errorName(err) });
+        break :blk Cfg.Config.init(gpa);
+    } else Cfg.Config.init(gpa);
     defer cfg.deinit();
 
     var choice: Picker.Choice = undefined;
@@ -132,7 +135,10 @@ pub fn main(init: std.process.Init) !void {
 
     // Chat history lives in ~/.config/irc-client/history (best effort: a
     // corrupt file just means we start over, like the config does).
-    var history = History.load(gpa, io) catch History.init(gpa, io);
+    var history = History.load(gpa, io) catch |err| blk: {
+        std.log.warn("ignoring corrupt history, starting fresh: {s}", .{@errorName(err)});
+        break :blk History.init(gpa, io);
+    };
     defer history.deinit();
 
     // The interface layer owns its own display state; seed it with our nick.

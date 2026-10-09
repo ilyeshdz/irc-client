@@ -40,8 +40,8 @@ pub fn syncMembership(self: *IrcClient, msg: Message) void {
     if (channel.len == 0) return;
 
     if (std.mem.eql(u8, msg.command, "JOIN")) {
-        rememberChannel(self, channel) catch return;
-        setCurrentChannel(self, channel) catch return;
+        rememberChannel(self, channel) catch |err| std.log.warn("could not remember channel {s}: {s}", .{ channel, @errorName(err) });
+        setCurrentChannel(self, channel) catch |err| std.log.warn("could not target channel {s}: {s}", .{ channel, @errorName(err) });
     } else if (std.mem.eql(u8, msg.command, "PART")) {
         leaveChannel(self, channel);
     }

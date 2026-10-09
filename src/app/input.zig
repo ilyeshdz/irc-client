@@ -122,9 +122,10 @@ fn drainServer(client: *IrcClient, display: *Display, ibox: *InputBox, buf: *[51
     while (true) {
         const more = client.hasCompleteLine() catch return false;
         if (!more) break;
-        const msg = client.readMessageInto(buf) catch {
+        const msg = client.readMessageInto(buf) catch |err| {
             // The line is consumed either way; only a dead socket stops us.
             if (!client.isConnected()) return false;
+            std.log.debug("dropping server line: {s}", .{@errorName(err)});
             continue;
         };
         if (msg) |m| {
@@ -132,7 +133,10 @@ fn drainServer(client: *IrcClient, display: *Display, ibox: *InputBox, buf: *[51
             // 433: nick taken (login collision, ghost on reconnect). Claim
             // `nick_` at once so we don't sit unregistered in backoff.
             if (std.mem.eql(u8, m.command, "433")) {
-                const alt = client.useAlternateNick() catch continue;
+                const alt = client.useAlternateNick() catch |err| {
+                    std.log.warn("433 fallback failed: {s}", .{@errorName(err)});
+                    continue;
+                };
                 display.setCurrentNick(alt) catch |err| std.log.warn("433 fallback sent, but display nick not updated: {s}", .{@errorName(err)});
             }
         }
