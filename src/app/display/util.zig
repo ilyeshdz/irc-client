@@ -63,7 +63,10 @@ pub fn reasonOf(msg: Message, idx: usize) []const u8 {
 }
 
 pub fn isChannelTarget(target: []const u8) bool {
-    return std.mem.startsWith(u8, target, "#") or std.mem.startsWith(u8, target, "&");
+    // RFC 2811 channel prefixes: # and & are the common ones, + (modeless)
+    // and ! (safe) are rarer but must not be routed as private messages.
+    return std.mem.startsWith(u8, target, "#") or std.mem.startsWith(u8, target, "&") or
+        std.mem.startsWith(u8, target, "+") or std.mem.startsWith(u8, target, "!");
 }
 
 /// Join space-separated params (skipping empties) for MODE display.

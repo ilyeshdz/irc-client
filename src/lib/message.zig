@@ -30,6 +30,7 @@ pub const Message = struct {
         if (line[cursor] == '@') {
             const space_idx = std.mem.findScalarPos(u8, line, 0, ' ') orelse return error.InvalidMessage;
             msg.tags = line[1..space_idx];
+            if (msg.tags.?.len == 0) return error.InvalidMessage;
             cursor = space_idx + 1;
             while (cursor < line.len and line[cursor] == ' ') : (cursor += 1) {}
             if (cursor >= line.len) return error.InvalidMessage;
@@ -88,9 +89,9 @@ pub const Message = struct {
     /// Formats the message into a full IRC line, terminated by CRLF.
     pub fn format(self: Message, writer: *std.Io.Writer) !void {
         if (self.command.len == 0) return error.InvalidMessage;
-        if (hasCrlf(self.command)) return error.InvalidMessage;
+        if (hasForbidden(self.command)) return error.InvalidMessage;
         if (self.prefix) |prefix| {
-            if (hasCrlf(prefix)) return error.InvalidMessage;
+            if (hasForbidden(prefix)) return error.InvalidMessage;
             try writer.writeAll(":");
             try writer.writeAll(prefix);
             try writer.writeAll(" ");
@@ -98,21 +99,24 @@ pub const Message = struct {
         try writer.writeAll(self.command);
         for (self.params) |param| {
             if (param.len == 0) continue;
-            if (hasCrlf(param)) return error.InvalidMessage;
+            if (hasForbidden(param)) return error.InvalidMessage;
             try writer.writeAll(" ");
             try writer.writeAll(param);
         }
         if (self.trailing.len > 0) {
-            if (hasCrlf(self.trailing)) return error.InvalidMessage;
+            if (hasForbidden(self.trailing)) return error.InvalidMessage;
             try writer.writeAll(" :");
             try writer.writeAll(self.trailing);
         }
         try writer.writeAll("\r\n");
     }
 
-    fn hasCrlf(s: []const u8) bool {
+    /// IRC forbids CR, LF and NUL on the wire; a stray byte would leave
+    /// the framing to the server's interpretation, so refuse it locally.
+    fn hasForbidden(s: []const u8) bool {
         return std.mem.indexOfScalar(u8, s, '\r') != null or
-            std.mem.indexOfScalar(u8, s, '\n') != null;
+            std.mem.indexOfScalar(u8, s, '\n') != null or
+            std.mem.indexOfScalar(u8, s, 0) != null;
     }
 };
 
@@ -177,6 +181,7 @@ test "parse rejects empty and prefix-only lines" {
     try t.expectError(error.InvalidMessage, Message.parse(":nick-only"));
     try t.expectError(error.InvalidMessage, Message.parse(":nick-only "));
     try t.expectError(error.InvalidMessage, Message.parse("@only-tags-no-space"));
+    try t.expectError(error.InvalidMessage, Message.parse("@ :srv PRIVMSG #zig :hi"));
 }
 
 test "format round-trips a parsed line" {
@@ -207,5 +212,10 @@ test "format skips empty params and rejects line breaks" {
     try t.expectError(error.InvalidMessage, (Message{
         .command = "PRIVMSG",
         .params = .{"#a\nb"} ++ .{""} ** 14,
+    }).format(&w));
+    w = std.Io.Writer.fixed(&buf);
+    try t.expectError(error.InvalidMessage, (Message{
+        .command = "PRIVMSG",
+        .params = .{"#a\x00b"} ++ .{""} ** 14,
     }).format(&w));
 }
