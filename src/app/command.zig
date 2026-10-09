@@ -40,91 +40,167 @@ pub const Command = union(enum) {
         const cmd = without_slash[0..cmd_end];
         var args = std.mem.trimStart(u8, without_slash[cmd_end..], " ");
 
-        if (std.mem.eql(u8, cmd, "join") or std.mem.eql(u8, cmd, "j")) {
-            const channel = nextToken(&args) orelse return error.MissingArgument;
-            return Command{ .Join = channel };
-        } else if (std.mem.eql(u8, cmd, "list") or std.mem.eql(u8, cmd, "l")) {
-            return Command{ .List = {} };
-        } else if (std.mem.eql(u8, cmd, "part") or std.mem.eql(u8, cmd, "p")) {
-            const channel = nextToken(&args) orelse return error.MissingArgument;
-            const reason = restOrNull(&args);
-            return Command{ .Part = .{ .channel = channel, .reason = reason } };
-        } else if (std.mem.eql(u8, cmd, "msg") or std.mem.eql(u8, cmd, "m") or std.mem.eql(u8, cmd, "privmsg")) {
-            const target = nextToken(&args) orelse return error.MissingArgument;
-            const text = restOrNull(&args) orelse return error.MissingArgument;
-            return Command{ .Msg = .{ .target = target, .text = text } };
-        } else if (std.mem.eql(u8, cmd, "raw") or std.mem.eql(u8, cmd, "r")) {
-            const command = nextToken(&args) orelse return error.MissingArgument;
-            const params = restOrNull(&args) orelse "";
-            return Command{ .Raw = .{ .command = command, .params = params } };
-        } else if (std.mem.eql(u8, cmd, "quit") or std.mem.eql(u8, cmd, "q")) {
-            const reason = restOrNull(&args);
-            return Command{ .Quit = reason };
-        } else if (std.mem.eql(u8, cmd, "reconnect")) {
-            return Command{ .Reconnect = {} };
-        } else if (std.mem.eql(u8, cmd, "nick") or std.mem.eql(u8, cmd, "n")) {
-            const nick = nextToken(&args) orelse return error.MissingArgument;
-            return Command{ .Nick = nick };
-        } else if (std.mem.eql(u8, cmd, "topic") or std.mem.eql(u8, cmd, "t")) {
-            const channel = nextToken(&args) orelse {
-                if (current_channel) |chan| {
-                    if (chan.len == 0) return error.MissingArgument;
-                    return Command{ .Topic = .{ .channel = chan, .text = null } };
-                }
-                return error.MissingArgument;
-            };
-            const text = restOrNull(&args);
-            return Command{ .Topic = .{ .channel = channel, .text = text } };
-        } else if (std.mem.eql(u8, cmd, "names")) {
-            const channel = nextToken(&args);
-            return Command{ .Names = channel };
-        } else if (std.mem.eql(u8, cmd, "whois") or std.mem.eql(u8, cmd, "w")) {
-            const nick = nextToken(&args) orelse return error.MissingArgument;
-            return Command{ .Whois = nick };
-        } else if (std.mem.eql(u8, cmd, "who")) {
-            const target = nextToken(&args) orelse {
-                if (current_channel) |chan| {
-                    if (chan.len == 0) return error.MissingArgument;
-                    return Command{ .Who = chan };
-                }
-                return error.MissingArgument;
-            };
-            return Command{ .Who = target };
-        } else if (std.mem.eql(u8, cmd, "mode")) {
-            const target = nextToken(&args) orelse {
-                if (current_channel) |chan| {
-                    if (chan.len == 0) return error.MissingArgument;
-                    return Command{ .Mode = .{ .target = chan, .modes = null } };
-                }
-                return error.MissingArgument;
-            };
-            const modes = restOrNull(&args);
-            return Command{ .Mode = .{ .target = target, .modes = modes } };
-        } else if (std.mem.eql(u8, cmd, "kick") or std.mem.eql(u8, cmd, "k")) {
-            const channel = nextToken(&args) orelse return error.MissingArgument;
-            const nick = nextToken(&args) orelse return error.MissingArgument;
-            const reason = restOrNull(&args);
-            return Command{ .Kick = .{ .channel = channel, .nick = nick, .reason = reason } };
-        } else if (std.mem.eql(u8, cmd, "invite") or std.mem.eql(u8, cmd, "i")) {
-            const nick = nextToken(&args) orelse return error.MissingArgument;
-            const channel = nextToken(&args) orelse {
-                if (current_channel) |chan| {
-                    if (chan.len == 0) return error.MissingArgument;
-                    return Command{ .Invite = .{ .nick = nick, .channel = chan } };
-                }
-                return error.MissingArgument;
-            };
-            return Command{ .Invite = .{ .nick = nick, .channel = channel } };
-        } else if (std.mem.eql(u8, cmd, "away")) {
-            const message = restOrNull(&args);
-            return Command{ .Away = message };
-        } else if (std.mem.eql(u8, cmd, "me")) {
-            const text = restOrNull(&args) orelse return error.MissingArgument;
-            return Command{ .Me = .{ .target = current_channel, .text = text } };
-        } else if (std.mem.eql(u8, cmd, "help") or std.mem.eql(u8, cmd, "h")) {
-            return Command{ .Help = {} };
-        } else {
-            return Command{ .Unknown = cmd };
+        const Kind = enum {
+            join,
+            list,
+            part,
+            msg,
+            raw,
+            quit,
+            reconnect,
+            nick,
+            topic,
+            names,
+            whois,
+            who,
+            mode,
+            kick,
+            invite,
+            away,
+            me,
+            help,
+        };
+
+        // Zig can't switch on a []u8 directly, so resolve the name (and its
+        // single-letter shortcut) to an enum first, then switch on that.
+        // Add a row here instead of a branch when supporting a new command.
+        const commands = std.StaticStringMap(Kind).initComptime(.{
+            .{ "join", .join },
+            .{ "j", .join },
+            .{ "list", .list },
+            .{ "l", .list },
+            .{ "part", .part },
+            .{ "p", .part },
+            .{ "msg", .msg },
+            .{ "m", .msg },
+            .{ "privmsg", .msg },
+            .{ "raw", .raw },
+            .{ "r", .raw },
+            .{ "quit", .quit },
+            .{ "q", .quit },
+            .{ "reconnect", .reconnect },
+            .{ "nick", .nick },
+            .{ "n", .nick },
+            .{ "topic", .topic },
+            .{ "t", .topic },
+            .{ "names", .names },
+            .{ "whois", .whois },
+            .{ "w", .whois },
+            .{ "who", .who },
+            .{ "mode", .mode },
+            .{ "kick", .kick },
+            .{ "k", .kick },
+            .{ "invite", .invite },
+            .{ "i", .invite },
+            .{ "away", .away },
+            .{ "me", .me },
+            .{ "help", .help },
+            .{ "h", .help },
+        });
+
+        const kind = commands.get(cmd) orelse return Command{ .Unknown = cmd };
+        switch (kind) {
+            .join => {
+                const channel = nextToken(&args) orelse return error.MissingArgument;
+                return Command{ .Join = channel };
+            },
+            .list => {
+                return Command{ .List = {} };
+            },
+            .part => {
+                const channel = nextToken(&args) orelse return error.MissingArgument;
+                const reason = restOrNull(&args);
+                return Command{ .Part = .{ .channel = channel, .reason = reason } };
+            },
+            .msg => {
+                const target = nextToken(&args) orelse return error.MissingArgument;
+                const text = restOrNull(&args) orelse return error.MissingArgument;
+                return Command{ .Msg = .{ .target = target, .text = text } };
+            },
+            .raw => {
+                const command = nextToken(&args) orelse return error.MissingArgument;
+                const params = restOrNull(&args) orelse "";
+                return Command{ .Raw = .{ .command = command, .params = params } };
+            },
+            .quit => {
+                const reason = restOrNull(&args);
+                return Command{ .Quit = reason };
+            },
+            .reconnect => {
+                return Command{ .Reconnect = {} };
+            },
+            .nick => {
+                const nick = nextToken(&args) orelse return error.MissingArgument;
+                return Command{ .Nick = nick };
+            },
+            .topic => {
+                const channel = nextToken(&args) orelse {
+                    if (current_channel) |chan| {
+                        if (chan.len == 0) return error.MissingArgument;
+                        return Command{ .Topic = .{ .channel = chan, .text = null } };
+                    }
+                    return error.MissingArgument;
+                };
+                const text = restOrNull(&args);
+                return Command{ .Topic = .{ .channel = channel, .text = text } };
+            },
+            .names => {
+                const channel = nextToken(&args);
+                return Command{ .Names = channel };
+            },
+            .whois => {
+                const nick = nextToken(&args) orelse return error.MissingArgument;
+                return Command{ .Whois = nick };
+            },
+            .who => {
+                const target = nextToken(&args) orelse {
+                    if (current_channel) |chan| {
+                        if (chan.len == 0) return error.MissingArgument;
+                        return Command{ .Who = chan };
+                    }
+                    return error.MissingArgument;
+                };
+                return Command{ .Who = target };
+            },
+            .mode => {
+                const target = nextToken(&args) orelse {
+                    if (current_channel) |chan| {
+                        if (chan.len == 0) return error.MissingArgument;
+                        return Command{ .Mode = .{ .target = chan, .modes = null } };
+                    }
+                    return error.MissingArgument;
+                };
+                const modes = restOrNull(&args);
+                return Command{ .Mode = .{ .target = target, .modes = modes } };
+            },
+            .kick => {
+                const channel = nextToken(&args) orelse return error.MissingArgument;
+                const nick = nextToken(&args) orelse return error.MissingArgument;
+                const reason = restOrNull(&args);
+                return Command{ .Kick = .{ .channel = channel, .nick = nick, .reason = reason } };
+            },
+            .invite => {
+                const nick = nextToken(&args) orelse return error.MissingArgument;
+                const channel = nextToken(&args) orelse {
+                    if (current_channel) |chan| {
+                        if (chan.len == 0) return error.MissingArgument;
+                        return Command{ .Invite = .{ .nick = nick, .channel = chan } };
+                    }
+                    return error.MissingArgument;
+                };
+                return Command{ .Invite = .{ .nick = nick, .channel = channel } };
+            },
+            .away => {
+                const message = restOrNull(&args);
+                return Command{ .Away = message };
+            },
+            .me => {
+                const text = restOrNull(&args) orelse return error.MissingArgument;
+                return Command{ .Me = .{ .target = current_channel, .text = text } };
+            },
+            .help => {
+                return Command{ .Help = {} };
+            },
         }
     }
 
