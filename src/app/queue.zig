@@ -43,9 +43,13 @@ pub fn scheduleRetry(at: *?std.Io.Timestamp, delay_ms: *u64, now: std.Io.Timesta
 }
 
 /// Schedule the next attempt and tell the user how long the wait is.
+/// The wait is jittered by +-25% so clients dropped together do not
+/// retry in lockstep (thundering herd on server restart).
 pub fn planRetry(at: *?std.Io.Timestamp, delay_ms: *u64, now: std.Io.Timestamp, display: *Display) void {
     const wait_ms = scheduleRetry(at, delay_ms, now);
-    display.info("retrying in {d}s (Ctrl-C to cancel)\n", .{wait_ms / 1000});
+    const jittered = std.crypto.random.intRangeAtMost(u64, wait_ms * 3 / 4, wait_ms * 5 / 4);
+    at.* = now.addDuration(.{ .nanoseconds = @as(i96, jittered) * ns_per_ms });
+    display.info("retrying in {d}s (Ctrl-C to cancel)\n", .{jittered / 1000});
 }
 
 /// Lines submitted while the connection was down, replayed once it is back.
