@@ -1,18 +1,16 @@
-# Release Drafter config for the nightly builds.
+# Standard Release Drafter config: maintains the draft notes for the next
+# stable release on every push to main. Base is the latest stable tag
+# (prereleases like `nightly` are excluded), so the draft always reflects
+# "what will ship in the next version".
 #
-# It only drafts the "Pull requests" section into a throwaway `nightly-draft`
-# release (see .github/workflows/nightly.yml): the nightly job reads that
-# body back, appends the direct-commit list (this repo mostly pushes straight
-# to main, which Release Drafter cannot see), and publishes the real floating
-# `nightly` prerelease itself.
-name-template: 'Nightly draft — do not publish'
-tag-template: 'nightly-draft'
-
-# The previous `nightly` prerelease is the base: list what landed since it.
-include-pre-releases: true
+# This only works if changes land via pull requests with changelog labels,
+# see AGENTS.md. Direct pushes to main are invisible to Release Drafter.
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
 
 categories:
   - title: 'Features'
+    semver-increment: minor
     when:
       labels: ['feature', 'enhancement']
   - title: 'Bug Fixes'
@@ -23,10 +21,19 @@ categories:
       labels: ['chore', 'dependencies', 'ci']
   # Catches unlabeled PRs so nothing merged ever goes missing.
   - title: 'Other changes'
+  - type: pre-exclude
+    when:
+      labels: ['skip-changelog']
 
 change-template: '- $TITLE (#$NUMBER) $AUTHORS'
 
-no-changes-template: '* No merged pull requests since the last nightly.'
+no-changes-template: '* No changes'
 
 template: |
+  ## Changes
+
   $CHANGES
+
+  ## Contributors
+
+  $CONTRIBUTORS
