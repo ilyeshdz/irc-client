@@ -1,0 +1,102 @@
+name: Nightly
+
+on:
+  # Weekly unstable build from main (Monday 02:00 UTC).
+  schedule:
+    - cron: "0 2 * * 1"
+  # Manual trigger for an immediate nightly ("dès maintenant"):
+  # Actions -> Nightly -> Run workflow.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux-musl
+            archive: x86_64-linux
+          - target: aarch64-linux-musl
+            archive: aarch64-linux
+          - target: x86_64-macos
+            archive: x86_64-macos
+          - target: aarch64-macos
+            archive: aarch64-macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Compute nightly version
+        id: version
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
+          echo "version=nightly-$DATE-$SHA" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: |
+          zig build -Doptimize=ReleaseSafe -Dstrip \
+            -Dtarget=${{ matrix.target }} \
+            -Dversion=${{ steps.version.outputs.version }}
+
+      - name: Package
+        run: |
+          stage=irc_client-${{ steps.version.outputs.version }}-${{ matrix.archive }}
+          mkdir "$stage"
+          cp zig-out/bin/irc_client "$stage/"
+          cp README.md LICENSE "$stage/"
+          tar czf "$stage.tar.gz" "$stage"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.target }}
+          path: "*.tar.gz"
+          retention-days: 14
+
+  publish:
+    name: publish nightly
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # Floating `nightly` tag: each run overwrites the previous
+      # prerelease. Stable releases (v*) keep `latest`.
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly build
+          prerelease: true
+          make_latest: false
+          generate_release_notes: false
+          body: |
+            Unstable weekly build from `main`. Expect breakage, do not use in production.
+
+            - Commit: ${{ github.sha }}
+            - Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt

@@ -42,7 +42,10 @@ pub fn scheduleRetry(at: *?std.Io.Timestamp, delay_ms: *u64, now: std.Io.Timesta
 /// Jittered by +-25% so clients dropped together do not retry in lockstep.
 pub fn planRetry(at: *?std.Io.Timestamp, delay_ms: *u64, now: std.Io.Timestamp, display: *Display) void {
     const wait_ms = scheduleRetry(at, delay_ms, now);
-    const jittered = std.crypto.random.intRangeAtMost(u64, wait_ms * 3 / 4, wait_ms * 5 / 4);
+    // Jitter only spreads out retries: a clock-seeded PRNG is plenty,
+    // no need for OS randomness here.
+    var prng = std.Random.DefaultPrng.init(@truncate(@as(u96, @bitCast(now.nanoseconds))));
+    const jittered = prng.random().intRangeAtMost(u64, wait_ms * 3 / 4, wait_ms * 5 / 4);
     at.* = now.addDuration(.{ .nanoseconds = @as(i96, jittered) * ns_per_ms });
     display.info("retrying in {d}s (Ctrl-C to cancel)\n", .{jittered / 1000});
 }

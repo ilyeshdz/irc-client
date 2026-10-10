@@ -30,6 +30,12 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    // Nightly builds are unstable by definition: say so on every run so
+    // nobody mistakes one for a stable release.
+    if (std.mem.startsWith(u8, build_options.version, "nightly")) {
+        out.print("warning: nightly build ({s}) — unstable, expect breakage\n", .{build_options.version});
+    }
+
     // Profiles live in ~/.config/irc-client/config.
     const cfg_path = Cfg.configPath(gpa) catch null;
     defer if (cfg_path) |p| gpa.free(p);

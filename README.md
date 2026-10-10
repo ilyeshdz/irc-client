@@ -10,6 +10,13 @@ This client is built with Zig, and we provide prebuilt binaries through GitHub R
 
 We provide prebuilt binaries for Linux (ARM and x86_64) as well as macOS. However, as mentioned earlier, Windows is not supported, and I probably won't support it in the future since the project heavily relies on POSIX-only libraries.
 
+## Nightly builds
+
+Unstable builds from `main` are published every Monday at 02:00 UTC as a prerelease on the floating `nightly` tag. Each run overwrites the previous one. Expect breakage, do not use in production. The binary also prints a warning on startup and reports a `nightly-YYYYMMDD-<sha>` version via `--version`.
+
+- Download: [nightly release](../../releases/tag/nightly)
+- Trigger one right now without waiting for Monday: Actions -> Nightly -> Run workflow.
+
 ## License
 
 This project is licensed under the GPL-3.0 license.
