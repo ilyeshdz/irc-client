@@ -71,6 +71,9 @@ jobs:
     name: publish nightly
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
     steps:
       # Full history + tags: the floating `nightly` tag marks the
       # previous run, so `nightly..HEAD` is the commit list below.
@@ -89,13 +92,29 @@ jobs:
           sha256sum *.tar.gz > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      # Release Drafter only sees merged PRs (not direct pushes to main),
+      # so it drafts just the PR section into a throwaway release below.
+      - name: Draft PR notes with release-drafter
+        uses: release-drafter/release-drafter@v7
+        with:
+          config-name: release-drafter.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Compose release notes
         id: notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           DATE=$(date -u +%Y-%m-%d)
           SHA_SHORT=$(echo "$GITHUB_SHA" | cut -c1-7)
           echo "date=$DATE" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA_SHORT" >> "$GITHUB_OUTPUT"
+
+          DRAFTER_BODY=$(gh release view nightly-draft --json body --jq .body 2>/dev/null || echo '* No merged pull requests since the last nightly.')
+          # The throwaway draft served its purpose: remove it so the
+          # Releases page only ever shows the real `nightly` prerelease.
+          gh release delete nightly-draft --yes --cleanup-tag 2>/dev/null || true
 
           PREV=$(git rev-parse -q --verify refs/tags/nightly || true)
           {
@@ -109,6 +128,10 @@ jobs:
             echo "| Date (UTC) | $DATE |"
             echo "| Commit | \`$GITHUB_SHA\` |"
             echo "| Workflow run | [#$GITHUB_RUN_NUMBER](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
+            echo ""
+            echo "## Pull requests"
+            echo ""
+            echo "$DRAFTER_BODY"
             echo ""
             if [ -n "$PREV" ] && [ "$PREV" != "$GITHUB_SHA" ]; then
               echo "## Commits since last nightly"

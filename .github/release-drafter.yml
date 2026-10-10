@@ -1,0 +1,32 @@
+# Release Drafter config for the nightly builds.
+#
+# It only drafts the "Pull requests" section into a throwaway `nightly-draft`
+# release (see .github/workflows/nightly.yml): the nightly job reads that
+# body back, appends the direct-commit list (this repo mostly pushes straight
+# to main, which Release Drafter cannot see), and publishes the real floating
+# `nightly` prerelease itself.
+name-template: 'Nightly draft — do not publish'
+tag-template: 'nightly-draft'
+
+# The previous `nightly` prerelease is the base: list what landed since it.
+include-pre-releases: true
+
+categories:
+  - title: 'Features'
+    when:
+      labels: ['feature', 'enhancement']
+  - title: 'Bug Fixes'
+    when:
+      labels: ['fix', 'bugfix', 'bug']
+  - title: 'Maintenance'
+    when:
+      labels: ['chore', 'dependencies', 'ci']
+  # Catches unlabeled PRs so nothing merged ever goes missing.
+  - title: 'Other changes'
+
+change-template: '- $TITLE (#$NUMBER) $AUTHORS'
+
+no-changes-template: '* No merged pull requests since the last nightly.'
+
+template: |
+  $CHANGES
