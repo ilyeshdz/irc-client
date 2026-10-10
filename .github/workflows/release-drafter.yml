@@ -1,0 +1,23 @@
+name: Release Drafter
+
+# Keeps the draft notes for the next stable release up to date.
+# Never publish this draft by hand: stable releases ship via `v*` tags
+# (see release.yml), nightlies via the floating `nightly` tag.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  update_release_draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: release-drafter/release-drafter@v7
+        with:
+          # Loads .github/release-drafter.yml, no checkout needed.
+          config-name: release-drafter.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
