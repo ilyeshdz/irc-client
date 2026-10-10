@@ -201,6 +201,10 @@ pub const IrcClient = struct {
         return commands.sendMessage(self, target, text);
     }
 
+    pub fn sendNotice(self: *IrcClient, target: []const u8, text: []const u8) !void {
+        return commands.sendNotice(self, target, text);
+    }
+
     pub fn partChannel(self: *IrcClient, channel: []const u8, reason: ?[]const u8) !void {
         return commands.partChannel(self, channel, reason);
     }

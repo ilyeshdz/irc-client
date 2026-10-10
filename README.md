@@ -17,6 +17,21 @@ Unstable builds from `main` are published every Monday at 02:00 UTC as a prerele
 - Download: [nightly release](../../releases/tag/nightly)
 - Trigger one right now without waiting for Monday: Actions -> Nightly -> Run workflow.
 
+## Profiles and autojoin
+
+Profiles live in `~/.config/irc-client/config`. To join channels
+automatically after connecting, add a `channels` list to a profile:
+
+```json
+{"profiles": [{"name": "home", "nick": "hdz", "realname": "hdz",
+  "host": "irc.libera.chat", "port": 6667, "tls": false,
+  "favorite": true, "channels": ["#zig", "#rust"]}],
+ "recent": [], "last_profile": "home"}
+```
+
+Missing keys and non-string entries are ignored, so hand-edited files
+keep working.
+
 ## License
 
 This project is licensed under the GPL-3.0 license.

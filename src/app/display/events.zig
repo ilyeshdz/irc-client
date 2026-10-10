@@ -11,7 +11,9 @@ pub fn handleJoin(self: *Display, msg: Message) !void {
     if (channel.len == 0) return;
 
     if (self.current_nick) |my_nick| {
-        if (std.mem.eql(u8, nick, my_nick)) {
+        const is_self = std.mem.eql(u8, nick, my_nick);
+        self.noteJoin(channel, nick, is_self);
+        if (is_self) {
             var chb: [256]u8 = undefined;
             util.event("You joined {s}\n", .{fmt.paintChannel(channel, &chb)});
             self.setCurrentChannel(channel) catch |err| std.log.warn("could not track joined channel {s}: {s}", .{ channel, @errorName(err) });
@@ -32,7 +34,9 @@ pub fn handlePart(self: *Display, msg: Message) !void {
     if (channel.len == 0) return;
 
     if (self.current_nick) |my_nick| {
-        if (std.mem.eql(u8, nick, my_nick)) {
+        const is_self = std.mem.eql(u8, nick, my_nick);
+        self.notePart(channel, nick, is_self);
+        if (is_self) {
             var chb: [256]u8 = undefined;
             util.event("You left {s}\n", .{fmt.paintChannel(channel, &chb)});
             if (self.current_channel) |current| {
@@ -50,9 +54,10 @@ pub fn handlePart(self: *Display, msg: Message) !void {
     }
 }
 
-pub fn handleQuit(_: *Display, msg: Message) !void {
+pub fn handleQuit(self: *Display, msg: Message) !void {
     const prefix = msg.prefix orelse return;
     const nick = util.nickOnly(prefix);
+    self.noteQuit(nick);
     var nb: [256]u8 = undefined;
     if (util.reasonOf(msg, 0).len > 0) {
         util.event("{s} quit ({s})\n", .{ fmt.paintNick(nick, &nb), util.reasonOf(msg, 0) });
@@ -85,6 +90,7 @@ pub fn handleKick(self: *Display, msg: Message) !void {
         });
     }
     if (self.current_nick) |my_nick| {
+        self.noteKick(channel, target, std.mem.eql(u8, target, my_nick));
         if (std.mem.eql(u8, target, my_nick)) {
             if (self.current_channel) |current| {
                 if (std.mem.eql(u8, current, channel)) self.setCurrentChannel(null) catch |err| std.log.warn("could not clear current channel {s}: {s}", .{ channel, @errorName(err) });
@@ -139,11 +145,13 @@ pub fn handleNick(self: *Display, msg: Message) !void {
         if (std.mem.eql(u8, old_nick, my_nick)) {
             var nb: [256]u8 = undefined;
             util.event("You are now known as {s}\n", .{fmt.paintNick(new_nick, &nb)});
+            self.noteNick(old_nick, new_nick);
             self.setCurrentNick(new_nick) catch |err| std.log.warn("could not track nick change to {s}: {s}", .{ new_nick, @errorName(err) });
         } else {
             var ob: [256]u8 = undefined;
             var nb: [256]u8 = undefined;
             util.event("{s} is now known as {s}\n", .{ fmt.paintNick(old_nick, &ob), fmt.paintNick(new_nick, &nb) });
+            self.noteNick(old_nick, new_nick);
         }
     }
 }

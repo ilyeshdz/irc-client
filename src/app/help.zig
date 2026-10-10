@@ -13,7 +13,11 @@ pub const HelpRow = struct {
 pub const help_rows = [_]HelpRow{
     .{ .cmd = "/join", .args = "<channel>", .desc = "Join a channel", .alias = "(alias: /j)" },
     .{ .cmd = "/part", .args = "<channel> [reason]", .desc = "Leave a channel", .alias = "(alias: /p)" },
+    .{ .cmd = "/cycle", .args = "[channel] [reason]", .desc = "Leave and rejoin a channel" },
     .{ .cmd = "/msg", .args = "<target> <text>", .desc = "Send a message", .alias = "(alias: /m)" },
+    .{ .cmd = "/notice", .args = "<target> <text>", .desc = "Send a notice" },
+    .{ .cmd = "/query", .args = "<nick>", .desc = "Open a PM conversation" },
+    .{ .cmd = "/close", .args = "[nick]", .desc = "Close a PM conversation" },
     .{ .cmd = "/me", .args = "<action>", .desc = "Send an action to current channel" },
     .{ .cmd = "/nick", .args = "<nick>", .desc = "Change nickname", .alias = "(alias: /n)" },
     .{ .cmd = "/topic", .args = "[chan] [text]", .desc = "Show or set topic", .alias = "(alias: /t)" },
