@@ -121,6 +121,10 @@ pub fn sendMessage(self: *IrcClient, target: []const u8, text: []const u8) !void
     try send.send(self, Message{ .command = "PRIVMSG", .params = .{target} ++ .{""} ** 14, .trailing = text });
 }
 
+pub fn sendNotice(self: *IrcClient, target: []const u8, text: []const u8) !void {
+    try send.send(self, Message{ .command = "NOTICE", .params = .{target} ++ .{""} ** 14, .trailing = text });
+}
+
 pub fn partChannel(self: *IrcClient, channel: []const u8, reason: ?[]const u8) !void {
     state.forgetChannel(self, channel);
     if (reason) |r| {

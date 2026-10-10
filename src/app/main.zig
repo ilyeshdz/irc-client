@@ -151,6 +151,33 @@ pub fn main(init: std.process.Init) !void {
         out.print("warning: could not save config to {s}\n", .{p});
     };
 
+    // Autojoin: channels stored on the profile join right after
+    // registration. Already-remembered channels are skipped so a
+    // reconnect never sends a double JOIN.
+    if (choice.profile_name) |pname| {
+        if (cfg.findProfile(pname)) |prof| {
+            for (prof.channels.items) |ch| {
+                var known = false;
+                for (client.channels.items) |c| {
+                    if (std.mem.eql(u8, c, ch)) {
+                        known = true;
+                        break;
+                    }
+                }
+                if (known) continue;
+                client.joinChannel(ch) catch |err| {
+                    std.log.warn("autojoin {s} failed: {s}", .{ ch, @errorName(err) });
+                    continue;
+                };
+                // First join wins the prompt; later JOIN echoes move it.
+                if (client.getCurrentChannel() == null) {
+                    client.setCurrentChannel(ch) catch |err| std.log.warn("could not target autojoin channel {s}: {s}", .{ ch, @errorName(err) });
+                    display.setCurrentChannel(ch) catch |err| std.log.warn("could not track autojoin channel {s}: {s}", .{ ch, @errorName(err) });
+                }
+            }
+        }
+    }
+
     try runEventLoop(&client, &display);
 }
 

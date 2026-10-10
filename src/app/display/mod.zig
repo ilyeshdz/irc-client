@@ -35,6 +35,12 @@ pub const Display = struct {
     server_ip: ?[]const u8,
     history_warned: bool,
     replayed: std.ArrayList([]const u8),
+    /// Members of the current channel for Tab completion, owned dupes.
+    roster: std.ArrayList([]const u8),
+    /// Channel `roster` belongs to (null when tracking nothing).
+    roster_channel: ?[]const u8,
+    /// Every channel seen this session (JOINs, 353s) for completion.
+    known_channels: std.ArrayList([]const u8),
 
     pub fn init(allocator: std.mem.Allocator) !Display {
         const motd_buffer = try std.ArrayList(u8).initCapacity(allocator, 1024);
@@ -52,6 +58,9 @@ pub const Display = struct {
             .server_ip = null,
             .history_warned = false,
             .replayed = .empty,
+            .roster = .empty,
+            .roster_channel = null,
+            .known_channels = .empty,
         };
     }
 
@@ -62,6 +71,11 @@ pub const Display = struct {
         if (self.server_ip) |s| self.allocator.free(s);
         for (self.replayed.items) |conv| self.allocator.free(conv);
         self.replayed.deinit(self.allocator);
+        for (self.roster.items) |nick| self.allocator.free(nick);
+        self.roster.deinit(self.allocator);
+        if (self.roster_channel) |c| self.allocator.free(c);
+        for (self.known_channels.items) |ch| self.allocator.free(ch);
+        self.known_channels.deinit(self.allocator);
     }
 
     pub fn setHistory(self: *Display, history: *History, server_ip: []const u8) !void {
@@ -181,6 +195,149 @@ pub const Display = struct {
         }
         if (nick.len == 0) return;
         self.current_nick = try self.allocator.dupe(u8, nick);
+    }
+
+    // --- Tab-completion roster: members of the current channel plus ---
+    // --- every channel seen this session. Fed by 353/JOIN/PART/etc. ---
+
+    /// Strip channel-status sigils (`@`, `+`, …) from a NAMES entry.
+    fn bareNick(raw: []const u8) []const u8 {
+        var s = raw;
+        while (s.len > 0 and (s[0] == '@' or s[0] == '%' or s[0] == '+' or s[0] == '~' or s[0] == '&')) s = s[1..];
+        return s;
+    }
+
+    fn trackChannel(self: *Display, channel: []const u8) void {
+        if (channel.len == 0) return;
+        for (self.known_channels.items) |c| {
+            if (std.mem.eql(u8, c, channel)) return;
+        }
+        const owned = self.allocator.dupe(u8, channel) catch return;
+        self.known_channels.append(self.allocator, owned) catch {
+            self.allocator.free(owned);
+        };
+    }
+
+    fn adoptRosterChannel(self: *Display, channel: []const u8) void {
+        if (self.roster_channel) |rc| {
+            if (std.mem.eql(u8, rc, channel)) return;
+            self.allocator.free(rc);
+            self.roster_channel = null;
+        }
+        self.clearRoster();
+        self.roster_channel = self.allocator.dupe(u8, channel) catch null;
+    }
+
+    fn clearRoster(self: *Display) void {
+        for (self.roster.items) |nick| self.allocator.free(nick);
+        self.roster.clearRetainingCapacity();
+    }
+
+    fn rosterHas(self: *const Display, nick: []const u8) bool {
+        for (self.roster.items) |n| {
+            if (std.mem.eql(u8, n, nick)) return true;
+        }
+        return false;
+    }
+
+    fn rosterAdd(self: *Display, raw_nick: []const u8) void {
+        const nick = bareNick(raw_nick);
+        if (nick.len == 0 or self.rosterHas(nick)) return;
+        const owned = self.allocator.dupe(u8, nick) catch return;
+        self.roster.append(self.allocator, owned) catch {
+            self.allocator.free(owned);
+        };
+    }
+
+    fn rosterRemove(self: *Display, nick: []const u8) void {
+        for (self.roster.items, 0..) |n, i| {
+            if (!std.mem.eql(u8, n, nick)) continue;
+            self.allocator.free(n);
+            _ = self.roster.orderedRemove(i);
+            return;
+        }
+    }
+
+    fn inCurrentChannel(self: *const Display, channel: []const u8) bool {
+        if (self.current_channel) |c| return std.mem.eql(u8, c, channel);
+        if (self.roster_channel) |rc| return std.mem.eql(u8, rc, channel);
+        return false;
+    }
+
+    /// Merge a `353` NAMES reply into the roster (members of `channel`).
+    pub fn noteNames(self: *Display, channel: []const u8, trailing: []const u8) void {
+        self.trackChannel(channel);
+        if (self.roster_channel == null) {
+            self.adoptRosterChannel(channel);
+        } else if (!self.inCurrentChannel(channel)) {
+            return;
+        }
+        var it = std.mem.tokenizeScalar(u8, trailing, ' ');
+        while (it.next()) |tok| self.rosterAdd(tok);
+    }
+
+    /// Track a JOIN: our own join adopts a fresh roster for the channel.
+    pub fn noteJoin(self: *Display, channel: []const u8, nick: []const u8, is_self: bool) void {
+        self.trackChannel(channel);
+        if (is_self) {
+            self.adoptRosterChannel(channel);
+            return;
+        }
+        if (self.inCurrentChannel(channel)) self.rosterAdd(nick);
+    }
+
+    /// Track a PART: leaving clears the roster, others just drop out.
+    pub fn notePart(self: *Display, channel: []const u8, nick: []const u8, is_self: bool) void {
+        if (is_self) {
+            if (self.inCurrentChannel(channel)) {
+                self.clearRoster();
+                if (self.roster_channel) |rc| {
+                    self.allocator.free(rc);
+                    self.roster_channel = null;
+                }
+            }
+            return;
+        }
+        if (self.inCurrentChannel(channel)) self.rosterRemove(nick);
+    }
+
+    /// QUIT drops the nick from the roster wherever it was.
+    pub fn noteQuit(self: *Display, nick: []const u8) void {
+        self.rosterRemove(util.nickOnly(nick));
+    }
+
+    /// KICK drops the target; being kicked clears the roster.
+    pub fn noteKick(self: *Display, channel: []const u8, target: []const u8, is_self_target: bool) void {
+        if (!self.inCurrentChannel(channel)) return;
+        if (is_self_target) {
+            self.clearRoster();
+            return;
+        }
+        self.rosterRemove(target);
+    }
+
+    /// NICK renames the user inside the roster.
+    pub fn noteNick(self: *Display, old_nick: []const u8, new_nick: []const u8) void {
+        const bare_old = bareNick(util.nickOnly(old_nick));
+        const bare_new = bareNick(new_nick);
+        if (bare_new.len == 0) return;
+        for (self.roster.items, 0..) |n, i| {
+            if (!std.mem.eql(u8, n, bare_old)) continue;
+            const owned = self.allocator.dupe(u8, bare_new) catch return;
+            self.allocator.free(n);
+            self.roster.items[i] = owned;
+            return;
+        }
+    }
+
+    /// Candidates for Tab completion: current-channel members first, then
+    /// known channels. Empty without any roster (e.g. lobby).
+    pub fn completionNicks(self: *const Display) []const []const u8 {
+        return self.roster.items;
+    }
+
+    pub fn completionChannels(self: *const Display) []const []const u8 {
+        return self.known_channels.items;
     }
 
     pub fn info(_: *Display, comptime f: []const u8, args: anytype) void {
@@ -317,6 +474,21 @@ pub const Display = struct {
                 self.record(target, my_nick, text);
             }
         }
+    }
+
+    /// Echo of a NOTICE we just sent. Rendered `-me-` style like incoming
+    /// notices, never like `<me>` PRIVMSG echoes, and saved to history.
+    pub fn echoNotice(self: *Display, target: []const u8, text: []const u8) void {
+        const me = self.current_nick orelse "me";
+        if (!util.isChannelTarget(target)) self.ensureReplayed(target);
+        var nb: [256]u8 = undefined;
+        if (util.isChannelTarget(target)) {
+            var chb: [256]u8 = undefined;
+            util.line("{s} -{s}- {s}\n", .{ fmt.paintChannel(target, &chb), fmt.paintNick(me, &nb), text });
+        } else {
+            util.line("NOTICE to {s}: {s}\n", .{ target, text });
+        }
+        if (self.current_nick) |my_nick| self.record(target, my_nick, text);
     }
 };
 

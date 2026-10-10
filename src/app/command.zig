@@ -3,7 +3,11 @@ const std = @import("std");
 pub const Command = union(enum) {
     Join: []const u8,
     Part: struct { channel: []const u8, reason: ?[]const u8 },
+    Cycle: struct { channel: ?[]const u8, reason: ?[]const u8 },
     Msg: struct { target: []const u8, text: []const u8 },
+    Notice: struct { target: []const u8, text: []const u8 },
+    Query: []const u8,
+    Close: ?[]const u8,
     Raw: struct { command: []const u8, params: []const u8 },
     Quit: ?[]const u8,
     Reconnect,
@@ -43,7 +47,11 @@ pub const Command = union(enum) {
             join,
             list,
             part,
+            cycle,
             msg,
+            notice,
+            query,
+            close,
             raw,
             quit,
             reconnect,
@@ -69,9 +77,13 @@ pub const Command = union(enum) {
             .{ "l", .list },
             .{ "part", .part },
             .{ "p", .part },
+            .{ "cycle", .cycle },
             .{ "msg", .msg },
             .{ "m", .msg },
             .{ "privmsg", .msg },
+            .{ "notice", .notice },
+            .{ "query", .query },
+            .{ "close", .close },
             .{ "raw", .raw },
             .{ "r", .raw },
             .{ "quit", .quit },
@@ -110,10 +122,38 @@ pub const Command = union(enum) {
                 const reason = restOrNull(&args);
                 return Command{ .Part = .{ .channel = channel, .reason = reason } };
             },
+            .cycle => {
+                const all_args = args;
+                const first = nextToken(&args);
+                const first_token = first orelse return Command{ .Cycle = .{ .channel = null, .reason = null } };
+                if (isChannelName(first_token)) {
+                    return Command{ .Cycle = .{ .channel = first_token, .reason = restOrNull(&args) } };
+                }
+                // A non-channel word targets the current channel: the whole
+                // tail is the reason (`/cycle brb` or `/cycle brb now`).
+                // Without a current channel it names a channel instead.
+                if (current_channel) |chan| {
+                    if (chan.len != 0) return Command{ .Cycle = .{ .channel = null, .reason = all_args } };
+                }
+                return Command{ .Cycle = .{ .channel = first_token, .reason = restOrNull(&args) } };
+            },
             .msg => {
                 const target = nextToken(&args) orelse return error.MissingArgument;
                 const text = restOrNull(&args) orelse return error.MissingArgument;
                 return Command{ .Msg = .{ .target = target, .text = text } };
+            },
+            .notice => {
+                const target = nextToken(&args) orelse return error.MissingArgument;
+                const text = restOrNull(&args) orelse return error.MissingArgument;
+                return Command{ .Notice = .{ .target = target, .text = text } };
+            },
+            .query => {
+                const nick = nextToken(&args) orelse return error.MissingArgument;
+                return Command{ .Query = nick };
+            },
+            .close => {
+                const nick = nextToken(&args);
+                return Command{ .Close = nick };
             },
             .raw => {
                 const command = nextToken(&args) orelse return error.MissingArgument;
@@ -216,6 +256,16 @@ pub const Command = union(enum) {
         if (args.*.len == 0) return null;
         return args.*;
     }
+
+    /// Channel names start with one of the RFC 2811 prefixes; anything
+    /// else is a nick or free text.
+    fn isChannelName(s: []const u8) bool {
+        if (s.len == 0) return false;
+        return switch (s[0]) {
+            '#', '&', '+', '!' => true,
+            else => false,
+        };
+    }
 };
 
 test "parse nick/topic/names/whois/me commands" {
@@ -300,4 +350,46 @@ test "parse plain text targets the current channel" {
     try t.expect(try Command.parse("", "#zig") == null);
     try t.expect((try Command.parse("/reconnect", "#zig")).? == .Reconnect);
     try t.expect((try Command.parse("/reconnect extra", null)).? == .Reconnect);
+}
+
+test "parse notice/query/close/cycle commands" {
+    const t = std.testing;
+
+    const cmd_notice = (try Command.parse("/notice alice hi there", null)).?;
+    try t.expectEqualStrings("alice", cmd_notice.Notice.target);
+    try t.expectEqualStrings("hi there", cmd_notice.Notice.text);
+    try t.expectError(error.MissingArgument, Command.parse("/notice alice", null));
+    try t.expectError(error.MissingArgument, Command.parse("/notice", null));
+
+    const cmd_query = (try Command.parse("/query alice", null)).?;
+    try t.expectEqualStrings("alice", cmd_query.Query);
+    try t.expectError(error.MissingArgument, Command.parse("/query", null));
+
+    const cmd_close = (try Command.parse("/close", null)).?;
+    try t.expect(cmd_close.Close == null);
+    const cmd_close_nick = (try Command.parse("/close alice", null)).?;
+    try t.expectEqualStrings("alice", cmd_close_nick.Close.?);
+
+    // Bare /cycle defers the channel to execution time.
+    const cmd_cycle = (try Command.parse("/cycle", "#zig")).?;
+    try t.expect(cmd_cycle.Cycle.channel == null);
+    try t.expect(cmd_cycle.Cycle.reason == null);
+
+    const cmd_cycle_chan = (try Command.parse("/cycle #zig", null)).?;
+    try t.expectEqualStrings("#zig", cmd_cycle_chan.Cycle.channel.?);
+    try t.expect(cmd_cycle_chan.Cycle.reason == null);
+
+    const cmd_cycle_reason = (try Command.parse("/cycle #zig brb now", null)).?;
+    try t.expectEqualStrings("#zig", cmd_cycle_reason.Cycle.channel.?);
+    try t.expectEqualStrings("brb now", cmd_cycle_reason.Cycle.reason.?);
+
+    // A non-channel word is a reason for the current channel.
+    const cmd_cycle_current = (try Command.parse("/cycle brb now", "#zig")).?;
+    try t.expect(cmd_cycle_current.Cycle.channel == null);
+    try t.expectEqualStrings("brb now", cmd_cycle_current.Cycle.reason.?);
+
+    // Without a current channel the same words name a channel.
+    const cmd_cycle_explicit = (try Command.parse("/cycle lobby brb", null)).?;
+    try t.expectEqualStrings("lobby", cmd_cycle_explicit.Cycle.channel.?);
+    try t.expectEqualStrings("brb", cmd_cycle_explicit.Cycle.reason.?);
 }

@@ -60,6 +60,25 @@ fn getBool(obj: std.json.ObjectMap, key: []const u8) bool {
     };
 }
 
+/// Autojoin list for a profile: array of channel names, tolerant to a
+/// missing key, a non-array value, and non-string entries (all skipped).
+fn getChannels(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !std.ArrayList([]const u8) {
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |s| allocator.free(s);
+        list.deinit(allocator);
+    }
+    const v = obj.get("channels") orelse return list;
+    if (v != .array) return list;
+    for (v.array.items) |item| {
+        if (item != .string) continue;
+        const s = std.mem.trim(u8, item.string, " \r\n\t");
+        if (s.len == 0) continue;
+        try list.append(allocator, try allocator.dupe(u8, s));
+    }
+    return list;
+}
+
 pub fn parseInto(cfg: *Config, bytes: []const u8) !void {
     const allocator = cfg.allocator;
     // JSON values own arena memory; our dupes keep the main allocator.
@@ -88,6 +107,7 @@ pub fn parseInto(cfg: *Config, bytes: []const u8) !void {
                     .port = getPortFor(o, tls),
                     .tls = tls,
                     .favorite = getBool(o, "favorite"),
+                    .channels = try getChannels(allocator, o),
                 });
             }
         }
@@ -124,6 +144,7 @@ const SerProfile = struct {
     port: u16,
     tls: bool,
     favorite: bool,
+    channels: []const []const u8,
 };
 
 const SerRecent = struct {
@@ -151,6 +172,7 @@ pub fn serialize(allocator: std.mem.Allocator, cfg: *const Config) ![]u8 {
             .port = p.port,
             .tls = p.tls,
             .favorite = p.favorite,
+            .channels = p.channels.items,
         };
     }
     const recent = try allocator.alloc(SerRecent, cfg.recent.items.len);
@@ -271,4 +293,51 @@ test "recent list caps and dedupes" {
     try cfg.recordUse("srv6.test", 6667, "n", null);
     try t.expectEqual(max_recent, cfg.recent.items.len);
     try t.expectEqualStrings("srv6.test", cfg.recent.items[0].host);
+}
+
+test "autojoin channels survive save/load" {
+    const t = std.testing;
+    var cfg = Config.init(t.allocator);
+    defer cfg.deinit();
+    try cfg.profiles.append(t.allocator, .{
+        .name = try t.allocator.dupe(u8, "home"),
+        .nick = try t.allocator.dupe(u8, "hdz"),
+        .realname = try t.allocator.dupe(u8, "hdz"),
+        .host = try t.allocator.dupe(u8, "irc.libera.chat"),
+        .port = 6667,
+    });
+    try cfg.profiles.items[0].channels.append(t.allocator, try t.allocator.dupe(u8, "#zig"));
+    try cfg.profiles.items[0].channels.append(t.allocator, try t.allocator.dupe(u8, "#rust"));
+
+    const bytes = try serialize(t.allocator, &cfg);
+    defer t.allocator.free(bytes);
+
+    var cfg2 = Config.init(t.allocator);
+    defer cfg2.deinit();
+    try parseInto(&cfg2, bytes);
+    try t.expectEqual(@as(usize, 2), cfg2.profiles.items[0].channels.items.len);
+    try t.expectEqualStrings("#zig", cfg2.profiles.items[0].channels.items[0]);
+    try t.expectEqualStrings("#rust", cfg2.profiles.items[0].channels.items[1]);
+}
+
+test "autojoin channels parse tolerantly" {
+    const t = std.testing;
+    // Missing key means no autojoin.
+    var cfg = Config.init(t.allocator);
+    defer cfg.deinit();
+    try parseInto(&cfg, "{\"profiles\": [{\"name\": \"x\"}]}");
+    try t.expectEqual(@as(usize, 0), cfg.profiles.items[0].channels.items.len);
+
+    // Non-array values and non-string entries are skipped.
+    var cfg2 = Config.init(t.allocator);
+    defer cfg2.deinit();
+    try parseInto(&cfg2, "{\"profiles\": [{\"name\": \"x\", \"channels\": [\"#zig\", 42, \"\", \"  \", \"#rust\"]}]}");
+    try t.expectEqual(@as(usize, 2), cfg2.profiles.items[0].channels.items.len);
+    try t.expectEqualStrings("#zig", cfg2.profiles.items[0].channels.items[0]);
+    try t.expectEqualStrings("#rust", cfg2.profiles.items[0].channels.items[1]);
+
+    var cfg3 = Config.init(t.allocator);
+    defer cfg3.deinit();
+    try parseInto(&cfg3, "{\"profiles\": [{\"name\": \"x\", \"channels\": \"#zig\"}]}");
+    try t.expectEqual(@as(usize, 0), cfg3.profiles.items[0].channels.items.len);
 }

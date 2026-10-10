@@ -6,6 +6,7 @@ const Display = @import("display.zig").Display;
 const InputBox = @import("inputbox.zig").InputBox;
 const queue = @import("queue.zig");
 const help = @import("help.zig");
+const display_util = @import("display/util.zig");
 
 /// Re-exported so `input.Command` keeps working; the type lives in `command.zig`.
 pub const Command = @import("command.zig").Command;
@@ -38,6 +39,57 @@ pub fn executeCommand(client: *IrcClient, display: *Display, cmd: Command) !Outc
         .Msg => |m| {
             try client.sendMessage(m.target, m.text);
             display.echoSent(m.target, m.text, false);
+        },
+        .Notice => |m| {
+            try client.sendNotice(m.target, m.text);
+            display.echoNotice(m.target, m.text);
+        },
+        .Query => |nick| {
+            try client.setCurrentChannel(nick);
+            try display.setCurrentChannel(nick);
+            // A PM conversation replays its saved history once per
+            // session, whoever speaks first.
+            display.ensureReplayed(nick);
+            display.info("Now talking to {s} — type a message, /close to leave\n", .{nick});
+        },
+        .Close => |nick| {
+            const current = client.getCurrentChannel() orelse {
+                out.print("No conversation open.\n", .{});
+                return .keep;
+            };
+            if (display_util.isChannelTarget(current)) {
+                out.print("Use /part to leave channels.\n", .{});
+                return .keep;
+            }
+            if (nick) |n| {
+                if (!std.mem.eql(u8, n, current)) {
+                    out.print("Not talking to {s} (current: {s}).\n", .{ n, current });
+                    return .keep;
+                }
+            }
+            display.info("Closed conversation with {s}\n", .{current});
+            try client.setCurrentChannel(null);
+            try display.setCurrentChannel(null);
+        },
+        .Cycle => |c| {
+            const resolved = c.channel orelse client.getCurrentChannel() orelse {
+                out.print("No current channel. Use /join first.\n", .{});
+                return .keep;
+            };
+            // The channel may alias the client's own current-channel
+            // storage, which partChannel frees: copy it aside first.
+            var chbuf: [256]u8 = undefined;
+            if (resolved.len > chbuf.len) {
+                out.print("Channel name too long.\n", .{});
+                return .keep;
+            }
+            @memcpy(chbuf[0..resolved.len], resolved);
+            const channel = chbuf[0..resolved.len];
+            try client.partChannel(channel, c.reason);
+            try client.joinChannel(channel);
+            // Membership ends joined: part forgot, join remembered.
+            try client.setCurrentChannel(channel);
+            try display.setCurrentChannel(channel);
         },
         .Raw => |r| {
             try client.sendRaw(r.command, r.params);
@@ -237,6 +289,12 @@ pub fn runEventLoop(client: *IrcClient, display: *Display) !void {
                 const n = try std.posix.read(stdin_fd, &tmp);
                 if (n == 0) return; // EOF
                 for (tmp[0..n]) |b| {
+                    // Tab completes against the display roster; with no
+                    // roster it is a no-op, never an error.
+                    if (b == 0x09) {
+                        ibox.complete(display.completionNicks(), display.completionChannels());
+                        continue;
+                    }
                     switch (ibox.feedByte(b)) {
                         .none => {},
                         .line => |submitted| {
@@ -441,4 +499,61 @@ test "lines typed while down are queued, and only leave once accepted" {
     // With nothing to replay there is no outcome at all.
     var empty = InputQueue{};
     try t.expect(flushQueue(&client, &d, &empty) == null);
+}
+
+test "query opens a PM target and close leaves it" {
+    const t = std.testing;
+    var d = try Display.init(t.allocator);
+    defer d.deinit();
+    try d.setCurrentNick("tester");
+
+    var client = IrcClient.initForTest(t.allocator);
+    defer client.deinit();
+
+    // /query targets the nick on both sides, with no server round trip.
+    try t.expectEqual(Outcome.keep, try executeCommand(&client, &d, .{ .Query = "carol" }));
+    try t.expectEqualStrings("carol", client.getCurrentChannel().?);
+    try t.expectEqualStrings("carol", d.current_channel.?);
+
+    // /close with no argument leaves the PM conversation.
+    try t.expectEqual(Outcome.keep, try executeCommand(&client, &d, .{ .Close = null }));
+    try t.expect(client.getCurrentChannel() == null);
+    try t.expect(d.current_channel == null);
+
+    // /close with nothing open stays put.
+    try t.expectEqual(Outcome.keep, try executeCommand(&client, &d, .{ .Close = null }));
+
+    // A channel target still requires /part, even naming it explicitly.
+    try client.setCurrentChannel("#zig");
+    try d.setCurrentChannel("#zig");
+    try t.expectEqual(Outcome.keep, try executeCommand(&client, &d, .{ .Close = null }));
+    try t.expectEqualStrings("#zig", client.getCurrentChannel().?);
+    try t.expectEqual(Outcome.keep, try executeCommand(&client, &d, .{ .Close = "#zig" }));
+    try t.expectEqualStrings("#zig", client.getCurrentChannel().?);
+
+    // /close <nick> only closes the matching conversation.
+    try client.setCurrentChannel("carol");
+    try d.setCurrentChannel("carol");
+    try t.expectEqual(Outcome.keep, try executeCommand(&client, &d, .{ .Close = "bob" }));
+    try t.expectEqualStrings("carol", client.getCurrentChannel().?);
+    try t.expectEqual(Outcome.keep, try executeCommand(&client, &d, .{ .Close = "carol" }));
+    try t.expect(client.getCurrentChannel() == null);
+    try t.expect(d.current_channel == null);
+}
+
+test "cycle and notice resolve without a server behind them" {
+    const t = std.testing;
+    var d = try Display.init(t.allocator);
+    defer d.deinit();
+    try d.setCurrentNick("tester");
+
+    var client = IrcClient.initForTest(t.allocator);
+    defer client.deinit();
+
+    // Bare /cycle with no current channel reports instead of failing.
+    try t.expectEqual(Outcome.keep, try executeCommand(&client, &d, .{ .Cycle = .{ .channel = null, .reason = null } }));
+
+    // With a socket the PART would go out; here the send fails loudly.
+    try t.expectError(error.NotConnected, executeCommand(&client, &d, .{ .Cycle = .{ .channel = "#zig", .reason = null } }));
+    try t.expectError(error.NotConnected, executeCommand(&client, &d, .{ .Notice = .{ .target = "carol", .text = "hi" } }));
 }

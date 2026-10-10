@@ -42,12 +42,17 @@ pub const Profile = struct {
     port: u16 = default_port,
     tls: bool = false,
     favorite: bool = false,
+    /// Channels joined automatically after (re)connect. Managed by
+    /// editing `channels` in the config file; empty by default.
+    channels: std.ArrayList([]const u8) = .empty,
 
     fn deinit(self: *Profile, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.nick);
         allocator.free(self.realname);
         allocator.free(self.host);
+        for (self.channels.items) |c| allocator.free(c);
+        self.channels.deinit(allocator);
     }
 };
 

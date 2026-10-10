@@ -221,3 +221,119 @@ test "joining a channel replays its saved history exactly once" {
     });
     try t.expectEqual(@as(usize, 1), d.replayed.items.len);
 }
+
+test "roster tracks the current channel for completion" {
+    const t = std.testing;
+    var d = try Display.init(t.allocator);
+    defer d.deinit();
+    try d.setCurrentNick("tester");
+
+    // No roster in the lobby: completion sees nothing.
+    try t.expectEqual(@as(usize, 0), d.completionNicks().len);
+    try t.expectEqual(@as(usize, 0), d.completionChannels().len);
+
+    // Our JOIN adopts a fresh roster; the NAMES reply fills it.
+    try d.handleServerMessage(.{
+        .prefix = "tester!u@h",
+        .command = "JOIN",
+        .params = .{"#zig"} ++ .{""} ** 14,
+    });
+    try d.handleServerMessage(.{
+        .prefix = "test.local",
+        .command = "353",
+        .params = .{ "tester", "=", "#zig" } ++ .{""} ** 12,
+        .trailing = "@alice +bob tester",
+    });
+    try t.expectEqualStrings("#zig", d.roster_channel.?);
+    try t.expectEqual(@as(usize, 3), d.completionNicks().len);
+    try t.expectEqualStrings("#zig", d.completionChannels()[0]);
+
+    // Late joiners and renames update the roster; leavers drop out.
+    try d.handleServerMessage(.{
+        .prefix = "carol!u@h",
+        .command = "JOIN",
+        .params = .{"#zig"} ++ .{""} ** 14,
+    });
+    try t.expectEqual(@as(usize, 4), d.completionNicks().len);
+    try d.handleServerMessage(.{
+        .prefix = "bob!u@h",
+        .command = "NICK",
+        .params = .{"bobby"} ++ .{""} ** 14,
+    });
+    try d.handleServerMessage(.{
+        .prefix = "carol!u@h",
+        .command = "PART",
+        .params = .{"#zig"} ++ .{""} ** 14,
+    });
+    try t.expectEqual(@as(usize, 3), d.completionNicks().len);
+    try d.handleServerMessage(.{
+        .prefix = "alice!u@h",
+        .command = "QUIT",
+        .trailing = "bye",
+    });
+    try t.expectEqual(@as(usize, 2), d.completionNicks().len);
+
+    // Being kicked off the channel clears the roster.
+    try d.handleServerMessage(.{
+        .prefix = "op!u@h",
+        .command = "KICK",
+        .params = .{ "#zig", "tester" } ++ .{""} ** 13,
+        .trailing = "out",
+    });
+    try t.expectEqual(@as(usize, 0), d.completionNicks().len);
+}
+
+test "sent notices echo distinctly and land in history" {
+    const t = std.testing;
+    var d = try Display.init(t.allocator);
+    defer d.deinit();
+    try d.setCurrentNick("tester");
+
+    var h = History.initWithPath(t.allocator, t.io, null);
+    defer h.deinit();
+    try d.setHistory(&h, "irc.libera.chat");
+
+    d.echoNotice("#zig", "mind the topic");
+    d.echoNotice("carol", "you there?");
+
+    try t.expectEqual(@as(usize, 1), h.servers.items.len);
+    const zig = h.servers.items[0].channels.items[0];
+    try t.expectEqualStrings("#zig", zig.name);
+    try t.expectEqualStrings("mind the topic", zig.messages.items[0].content);
+    const carol = h.servers.items[0].channels.items[1];
+    try t.expectEqualStrings("carol", carol.name);
+    try t.expectEqualStrings("you there?", carol.messages.items[0].content);
+}
+
+test "channel mentions render without crashing" {
+    const t = std.testing;
+    var d = try Display.init(t.allocator);
+    defer d.deinit();
+    try d.setCurrentNick("tester");
+    // Mention, plain message, own nick as sender, and an action mention.
+    try d.handleServerMessage(.{
+        .prefix = "alice!u@h",
+        .command = "PRIVMSG",
+        .params = .{"#zig"} ++ .{""} ** 14,
+        .trailing = "hey TESTER look here",
+    });
+    try d.handleServerMessage(.{
+        .prefix = "bob!u@h",
+        .command = "PRIVMSG",
+        .params = .{"#zig"} ++ .{""} ** 14,
+        .trailing = "nothing for you",
+    });
+    try d.handleServerMessage(.{
+        .prefix = "tester!u@h",
+        .command = "PRIVMSG",
+        .params = .{"#zig"} ++ .{""} ** 14,
+        .trailing = "tester talking to myself",
+    });
+    try d.handleServerMessage(.{
+        .prefix = "carol!u@h",
+        .command = "PRIVMSG",
+        .params = .{"#zig"} ++ .{""} ** 14,
+        .trailing = "\x01ACTION pokes tester\x01",
+    });
+    try t.expect(true);
+}

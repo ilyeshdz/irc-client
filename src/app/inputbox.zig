@@ -23,6 +23,12 @@ pub const InputBox = struct {
     draft: [1024]u8 = undefined,
     draft_len: usize = 0,
     has_draft: bool = false,
+    /// Tab-completion cycle: the prefix being completed and which
+    /// candidate is currently shown. Any edit or recall resets it.
+    tab_prefix: [256]u8 = undefined,
+    tab_prefix_len: usize = 0,
+    tab_idx: usize = 0,
+    tab_active: bool = false,
 
     pub fn init() InputBox {
         var self: InputBox = .{};
@@ -83,6 +89,7 @@ pub const InputBox = struct {
                 const submitted = self.buf[0..self.len];
                 self.pushHistory(submitted);
                 self.len = 0;
+                self.resetComplete();
                 return .{ .line = submitted };
             },
             0x03 => return .interrupt,
@@ -101,12 +108,17 @@ pub const InputBox = struct {
             0x15 => { // Ctrl-U: clear line
                 self.len = 0;
                 self.cancelBrowse();
+                self.resetComplete();
                 return .none;
             },
             0x7f, 0x08 => { // Backspace: erase one full UTF-8 codepoint
                 while (self.len > 0 and isContinuation(self.buf[self.len - 1])) self.len -= 1;
                 if (self.len > 0) self.len -= 1;
                 self.cancelBrowse();
+                self.resetComplete();
+                return .none;
+            },
+            0x09 => { // Tab is handled by complete(), not as typed input
                 return .none;
             },
             else => {
@@ -114,6 +126,7 @@ pub const InputBox = struct {
                     self.buf[self.len] = b;
                     self.len += 1;
                     self.cancelBrowse();
+                    self.resetComplete();
                 }
                 return .none;
             },
@@ -166,6 +179,7 @@ pub const InputBox = struct {
     /// Up: stash the in-progress line once, then walk toward older entries.
     fn recallOlder(self: *InputBox) void {
         if (self.hist_len == 0 or self.hist_pos >= self.hist_len) return;
+        self.resetComplete();
         if (self.hist_pos == 0) {
             @memcpy(self.draft[0..self.len], self.buf[0..self.len]);
             self.draft_len = self.len;
@@ -178,6 +192,7 @@ pub const InputBox = struct {
     /// Down: walk back toward the draft, restoring it at the end.
     fn recallNewer(self: *InputBox) void {
         if (self.hist_pos == 0) return;
+        self.resetComplete();
         self.hist_pos -= 1;
         if (self.hist_pos == 0) {
             if (self.has_draft) {
@@ -196,6 +211,99 @@ pub const InputBox = struct {
     fn cancelBrowse(self: *InputBox) void {
         self.hist_pos = 0;
         self.has_draft = false;
+    }
+
+    fn resetComplete(self: *InputBox) void {
+        self.tab_active = false;
+        self.tab_prefix_len = 0;
+        self.tab_idx = 0;
+    }
+
+    fn startsWithIgnoreCase(s: []const u8, prefix: []const u8) bool {
+        if (s.len < prefix.len) return false;
+        return std.ascii.eqlIgnoreCase(s[0..prefix.len], prefix);
+    }
+
+    /// Complete the word before the cursor (the buffer end; there is no
+    /// mid-line cursor) against channel members, then known channels.
+    /// Repeated calls cycle through the matches; with no match (or an
+    /// empty word) the line is left untouched, never an error.
+    pub fn complete(self: *InputBox, nicks: []const []const u8, channels: []const []const u8) void {
+        var start = self.len;
+        while (start > 0 and self.buf[start - 1] != ' ') start -= 1;
+        const word = self.buf[start..self.len];
+        if (word.len == 0) {
+            self.resetComplete();
+            return;
+        }
+
+        // A continued cycle shows the next candidate for the same prefix;
+        // any other word starts a fresh cycle from that word.
+        if (self.tab_active and self.tab_prefix_len > 0) {
+            const prefix = self.tab_prefix[0..self.tab_prefix_len];
+            const total = self.countMatches(prefix, nicks, channels);
+            const shown = if (total > 0) self.candidateAt(prefix, nicks, channels, self.tab_idx % total) else null;
+            if (shown != null and std.mem.eql(u8, word, shown.?)) {
+                self.tab_idx = (self.tab_idx + 1) % total;
+            } else {
+                const take = @min(word.len, self.tab_prefix.len);
+                @memcpy(self.tab_prefix[0..take], word[0..take]);
+                self.tab_prefix_len = take;
+                self.tab_idx = 0;
+            }
+        } else {
+            const take = @min(word.len, self.tab_prefix.len);
+            @memcpy(self.tab_prefix[0..take], word[0..take]);
+            self.tab_prefix_len = take;
+            self.tab_idx = 0;
+            self.tab_active = true;
+        }
+
+        const prefix = self.tab_prefix[0..self.tab_prefix_len];
+        const total = self.countMatches(prefix, nicks, channels);
+        if (total == 0) {
+            self.resetComplete();
+            return;
+        }
+        const pick = self.candidateAt(prefix, nicks, channels, self.tab_idx % total) orelse {
+            self.resetComplete();
+            return;
+        };
+        if (start + pick.len > self.buf.len) {
+            self.resetComplete();
+            return;
+        }
+        @memcpy(self.buf[start .. start + pick.len], pick);
+        self.len = start + pick.len;
+        self.cancelBrowse();
+    }
+
+    fn countMatches(self: *const InputBox, prefix: []const u8, nicks: []const []const u8, channels: []const []const u8) usize {
+        _ = self;
+        var n: usize = 0;
+        for (nicks) |nick| {
+            if (startsWithIgnoreCase(nick, prefix)) n += 1;
+        }
+        for (channels) |ch| {
+            if (startsWithIgnoreCase(ch, prefix)) n += 1;
+        }
+        return n;
+    }
+
+    fn candidateAt(self: *const InputBox, prefix: []const u8, nicks: []const []const u8, channels: []const []const u8, idx: usize) ?[]const u8 {
+        _ = self;
+        var i = idx;
+        for (nicks) |nick| {
+            if (!startsWithIgnoreCase(nick, prefix)) continue;
+            if (i == 0) return nick;
+            i -= 1;
+        }
+        for (channels) |ch| {
+            if (!startsWithIgnoreCase(ch, prefix)) continue;
+            if (i == 0) return ch;
+            i -= 1;
+        }
+        return null;
     }
 
     pub fn hide(self: *InputBox) void {
@@ -365,4 +473,76 @@ test "full history overwrites the oldest entry" {
     var j: usize = 0;
     while (j < InputBox.max_history - 1) : (j += 1) pressUp(&box);
     try t.expectEqualStrings("l1", box.buf[0..box.len]);
+}
+
+fn setBuf(box: *InputBox, text: []const u8) void {
+    @memcpy(box.buf[0..text.len], text);
+    box.len = text.len;
+}
+
+test "tab completes nicks, cycles, then falls back to channels" {
+    const t = std.testing;
+    var box: InputBox = .{};
+    const nicks: []const []const u8 = &.{ "alice", "alicia", "bob" };
+    const channels: []const []const u8 = &.{ "#zig", "#rust" };
+
+    setBuf(&box, "al");
+    box.complete(nicks, channels);
+    try t.expectEqualStrings("alice", box.buf[0..box.len]);
+    box.complete(nicks, channels);
+    try t.expectEqualStrings("alicia", box.buf[0..box.len]);
+    box.complete(nicks, channels);
+    try t.expectEqualStrings("alice", box.buf[0..box.len]);
+
+    // Channels complete after the roster, in order.
+    setBuf(&box, "#");
+    box.complete(nicks, channels);
+    try t.expectEqualStrings("#zig", box.buf[0..box.len]);
+    box.complete(nicks, channels);
+    try t.expectEqualStrings("#rust", box.buf[0..box.len]);
+
+    // Only the word before the cursor is completed.
+    setBuf(&box, "hey bo");
+    box.complete(nicks, channels);
+    try t.expectEqualStrings("hey bob", box.buf[0..box.len]);
+}
+
+test "tab is a no-op without a roster or a match, never an error" {
+    const t = std.testing;
+    var box: InputBox = .{};
+    const empty: []const []const u8 = &.{};
+
+    setBuf(&box, "al");
+    box.complete(empty, empty);
+    try t.expectEqualStrings("al", box.buf[0..box.len]);
+
+    const nicks: []const []const u8 = &.{"alice"};
+    setBuf(&box, "zzz");
+    box.complete(nicks, empty);
+    try t.expectEqualStrings("zzz", box.buf[0..box.len]);
+
+    // Empty word: nothing to complete.
+    setBuf(&box, "");
+    box.complete(nicks, empty);
+    try t.expectEqual(@as(usize, 0), box.len);
+
+    // Matching ignores case.
+    setBuf(&box, "AL");
+    box.complete(nicks, empty);
+    try t.expectEqualStrings("alice", box.buf[0..box.len]);
+}
+
+test "typing after a completion starts a fresh cycle" {
+    const t = std.testing;
+    var box: InputBox = .{};
+    const nicks: []const []const u8 = &.{ "alice", "alicia" };
+
+    setBuf(&box, "al");
+    box.complete(nicks, &.{});
+    try t.expectEqualStrings("alice", box.buf[0..box.len]);
+    _ = box.feedByte('x');
+    try t.expectEqualStrings("alicex", box.buf[0..box.len]);
+    // "alicex" matches nothing: the line is left alone.
+    box.complete(nicks, &.{});
+    try t.expectEqualStrings("alicex", box.buf[0..box.len]);
 }
